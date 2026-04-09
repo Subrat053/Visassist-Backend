@@ -1,0 +1,3 @@
+Hello {{applicantName}}, this is a reminder for your {{appointmentType}} appointment on {{appointmentDate}} at {{center}}. Ref: {{reference}}. Please reach at least 15 minutes early.
+
+Visaassist.org is a documentation and advisory support platform and does not provide legal immigration representation.

@@ -1,0 +1,13 @@
+Subject: Action Required - Pending Documents for {{caseId}}
+
+Dear {{applicantName}},
+
+This is a reminder that the following documents are still pending for your visa documentation file:
+{{pendingItems}}
+
+Please upload the documents at the earliest to avoid timeline delays.
+
+Important: Visaassist.org provides documentation and process advisory support only and does not provide legal immigration representation.
+
+Regards,
+Visaassist Case Support Team

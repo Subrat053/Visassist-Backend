@@ -1,0 +1,143 @@
+{
+  "info": {
+    "name": "Visaassist Backend API",
+    "description": "Postman collection for Visaassist.org advisory/documentation backend APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Staff Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/auth/staff-login", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "auth", "staff-login"] }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/auth/refresh-token", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "auth", "refresh-token"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leads CRM",
+      "item": [
+        {
+          "name": "Create Public Lead",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/public/leads", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "public", "leads"] }
+          }
+        },
+        {
+          "name": "List Leads",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/leads", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "leads"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cases",
+      "item": [
+        {
+          "name": "Create Case",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/cases", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "cases"] }
+          }
+        },
+        {
+          "name": "Update Case Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/cases/:caseId/status", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "cases", ":caseId", "status"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "Get Document Access URL",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/documents/:documentId/access-url?expiresInSec=300", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "documents", ":documentId", "access-url"], "query": [{ "key": "expiresInSec", "value": "300" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing",
+      "item": [
+        {
+          "name": "Create Invoice",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/billing/invoices", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "billing", "invoices"] }
+          }
+        },
+        {
+          "name": "Record Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/billing/invoices/:invoiceId/payments", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "billing", "invoices", ":invoiceId", "payments"] }
+          }
+        },
+        {
+          "name": "Download Invoice PDF",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/billing/invoices/:invoiceId/download/pdf", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "billing", "invoices", ":invoiceId", "download", "pdf"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/visaassist/reports/dashboard", "host": ["{{baseUrl}}"], "path": ["api", "v1", "visaassist", "reports", "dashboard"] }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "token", "value": "" }
+  ]
+}
