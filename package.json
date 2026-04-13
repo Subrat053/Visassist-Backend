@@ -7,7 +7,9 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seed/index.js",
-    "seed:visaassist": "node src/seed/visaassist.js"
+    "seed:visaassist": "node src/seed/visaassist.js",
+    "seed:visa-types": "node src/seed/visaTypes.js",
+    "seed:country-visa-types": "node src/seed/visaTypes.js"
   },
   "keywords": [
     "express",

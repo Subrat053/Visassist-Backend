@@ -1,0 +1,2230 @@
+const Country = require("../models/Country.js");
+const VisaCategory = require("../models/VisaCategory.js");
+const CountryVisaType = require("../models/CountryVisaType.js");
+const { VisaApplication, VISA_APPLICATION_STATUSES } = require("../models/VisaApplication.js");
+const { Enquiry, ENQUIRY_STATUSES, ENQUIRY_TYPES } = require("../models/Enquiry.js");
+const {
+  SupportTicket,
+  TICKET_CATEGORIES,
+  TICKET_STATUSES,
+  TICKET_PRIORITIES,
+} = require("../models/SupportTicket.js");
+const User = require("../models/User.js");
+const { uploadDocumentBuffer } = require("./cloudinary.service.js");
+const ApiError = require("../utils/ApiError.js");
+const { getPagination, getPaginationMeta } = require("../utils/pagination.js");
+
+const ALLOWED_ICON_KEYS = new Set([
+  "graduation-cap",
+  "users",
+  "briefcase",
+  "plane",
+  "file-text",
+  "shield-check",
+  "clock-3",
+  "badge-check",
+  "sparkles",
+  "folder-check",
+  "messages-square",
+  "map-pinned",
+  "heart-handshake",
+]);
+
+const ALLOWED_FILE_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+const slugify = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const trim = (value) => String(value || "").trim();
+
+const parseIfJson = (value, fallback) => {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return fallback;
+  }
+};
+
+const normalizeStringArray = (input) => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((item) => trim(item))
+    .filter(Boolean);
+};
+
+const normalizeFaqs = (input) => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((item, index) => ({
+      question: trim(item?.question),
+      answer: trim(item?.answer),
+      sortOrder: Number(item?.sortOrder) || index,
+    }))
+    .filter((item) => item.question && item.answer);
+};
+
+const normalizeServiceHighlights = (input) => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((item, index) => {
+      const iconKey = slugify(item?.iconKey);
+      if (iconKey && !ALLOWED_ICON_KEYS.has(iconKey)) {
+        throw new ApiError(422, "INVALID_ICON_KEY", `Unsupported icon key: ${item?.iconKey}`);
+      }
+
+      return {
+        title: trim(item?.title),
+        description: trim(item?.description),
+        iconKey,
+        sortOrder: Number(item?.sortOrder) || index,
+      };
+    })
+    .filter((item) => item.title || item.description);
+};
+
+const normalizeRequiredDocs = (input) => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((item, index) => {
+      if (typeof item === "string") {
+        return {
+          name: trim(item),
+          description: "",
+          isMandatory: true,
+          allowedFileTypes: [],
+          maxFiles: 1,
+          sortOrder: index,
+        };
+      }
+
+      const allowedFileTypes = normalizeStringArray(item?.allowedFileTypes).map((fileType) => fileType.toLowerCase());
+      if (allowedFileTypes.some((fileType) => !ALLOWED_FILE_TYPES.has(fileType))) {
+        throw new ApiError(
+          422,
+          "INVALID_FILE_TYPE",
+          "requiredDocs.allowedFileTypes contains unsupported mime type"
+        );
+      }
+
+      return {
+        name: trim(item?.name),
+        description: trim(item?.description),
+        isMandatory: item?.isMandatory !== false,
+        allowedFileTypes,
+        maxFiles: Math.max(1, Number(item?.maxFiles) || 1),
+        sortOrder: Number(item?.sortOrder) || index,
+      };
+    })
+    .filter((item) => item.name);
+};
+
+const normalizeProcess = (input) => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((item, index) => {
+      if (typeof item === "string") {
+        return {
+          title: trim(item),
+          description: "",
+          sortOrder: index,
+        };
+      }
+
+      return {
+        title: trim(item?.title || item?.label),
+        description: trim(item?.description),
+        sortOrder: Number(item?.sortOrder) || index,
+      };
+    })
+    .filter((item) => item.title || item.description);
+};
+
+const normalizeTimeline = (input) => {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((item, index) => {
+      if (typeof item === "string") {
+        return {
+          label: trim(item),
+          description: "",
+          sortOrder: index,
+        };
+      }
+
+      return {
+        label: trim(item?.label || item?.title),
+        description: trim(item?.description),
+        sortOrder: Number(item?.sortOrder) || index,
+      };
+    })
+    .filter((item) => item.label || item.description);
+};
+
+const hasOwn = (payload, key) => Object.prototype.hasOwnProperty.call(payload || {}, key);
+
+const buildCountryPayload = (item) => ({
+  _id: item._id,
+  name: item.name,
+  slug: item.slug,
+  code: item.code || "",
+  flagImage: item.flagImage || "",
+  heroImage: item.heroImage || item.imageUrl || "",
+  description: item.description || "",
+  isActive: item.isActive !== false,
+  sortOrder: Number.isFinite(item.sortOrder) ? item.sortOrder : Number(item.ranking) || 0,
+  updatedAt: item.updatedAt,
+  createdAt: item.createdAt,
+});
+
+const buildVisaCategoryPayload = (item) => ({
+  _id: item._id,
+  name: item.name,
+  slug: item.slug,
+  description: item.description || "",
+  iconKey: item.iconKey || "",
+  isActive: item.isActive !== false,
+  sortOrder: Number(item.sortOrder) || 0,
+  updatedAt: item.updatedAt,
+  createdAt: item.createdAt,
+});
+
+const buildCountryVisaTypePayload = (item, options = {}) => {
+  const source = item?.toObject ? item.toObject() : item;
+  const includeAdminFields = Boolean(options.includeAdminFields);
+  const publicPayload = {
+    _id: source._id,
+    countryId: source.countryId?._id || source.countryId || null,
+    visaCategoryId: source.visaCategoryId?._id || source.visaCategoryId || null,
+    countrySlug: source.countrySlug,
+    visaTypeSlug: source.visaTypeSlug,
+    countryName: source.countryName || source.countryId?.name || "",
+    visaTypeName: source.visaTypeName || source.visaCategoryId?.name || "",
+    title: source.title,
+    badge: source.badge || "",
+    subtitle: source.subtitle || "",
+    heroImage: source.heroImage || "",
+    iconKey: source.iconKey || source.visaCategoryId?.iconKey || "",
+    overview: source.overview || "",
+    serviceHighlights: Array.isArray(source.serviceHighlights) ? source.serviceHighlights : [],
+    eligibility: normalizeStringArray(source.eligibility),
+    requiredDocs: Array.isArray(source.requiredDocs) ? source.requiredDocs : [],
+    process: Array.isArray(source.process) ? source.process : [],
+    timeline: Array.isArray(source.timeline) ? source.timeline : [],
+    faqs: Array.isArray(source.faqs) ? source.faqs : [],
+    ctaTitle: source.ctaTitle || "",
+    ctaText: source.ctaText || "",
+    seoTitle: source.seoTitle || "",
+    seoDescription: source.seoDescription || "",
+    metaKeywords: normalizeStringArray(source.metaKeywords),
+    isActive: source.isActive !== false,
+    isFeatured: Boolean(source.isFeatured),
+    sortOrder: Number(source.sortOrder) || 0,
+    applicationEnabled: source.applicationEnabled !== false,
+    consultationEnabled: source.consultationEnabled !== false,
+  };
+
+  if (!includeAdminFields) {
+    return publicPayload;
+  }
+
+  return {
+    ...publicPayload,
+    country: source.countryId
+      ? {
+          _id: source.countryId._id,
+          name: source.countryId.name,
+          slug: source.countryId.slug,
+        }
+      : null,
+    visaCategory: source.visaCategoryId
+      ? {
+          _id: source.visaCategoryId._id,
+          name: source.visaCategoryId.name,
+          slug: source.visaCategoryId.slug,
+          iconKey: source.visaCategoryId.iconKey || "",
+        }
+      : null,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+  };
+};
+
+const generateYearlyNumber = async ({ model, fieldName, prefix, padding = 6 }) => {
+  const year = new Date().getFullYear();
+  const yearPrefix = `${prefix}-${year}-`;
+  const regex = new RegExp(`^${prefix}-${year}-\\d+$`);
+
+  const latest = await model.findOne({ [fieldName]: regex }).sort({ [fieldName]: -1 }).select(fieldName).lean();
+
+  let nextNumber = 1;
+  if (latest?.[fieldName]) {
+    const parts = String(latest[fieldName]).split("-");
+    const numeric = Number(parts[parts.length - 1]);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      nextNumber = numeric + 1;
+    }
+  }
+
+  return `${yearPrefix}${String(nextNumber).padStart(padding, "0")}`;
+};
+
+const ensureUserForApplication = async (payload, actorUserId = null) => {
+  if (actorUserId) {
+    const actor = await User.findById(actorUserId);
+    if (!actor || actor.isDeleted || !actor.isActive) {
+      throw new ApiError(401, "UNAUTHORIZED", "Authenticated user not found or inactive");
+    }
+    return actor;
+  }
+
+  const email = trim(payload?.applicantDetails?.email || payload.email).toLowerCase();
+  if (!email) {
+    throw new ApiError(422, "VALIDATION_ERROR", "Applicant email is required for guest application");
+  }
+
+  let user = await User.findOne({ email });
+  if (user) {
+    if (!user.isActive || user.isDeleted) {
+      throw new ApiError(403, "ACCOUNT_INACTIVE", "Applicant account is inactive");
+    }
+    return user;
+  }
+
+  const firstName = trim(payload?.applicantDetails?.firstName || payload.firstName || payload.fullName || "Applicant");
+  const lastName = trim(payload?.applicantDetails?.lastName || payload.lastName || "User");
+  const phone = trim(payload?.applicantDetails?.phone || payload.phone);
+
+  user = await User.create({
+    firstName: firstName || "Applicant",
+    lastName: lastName || "User",
+    email,
+    phone,
+    password: `Temp@${Date.now()}Aa1`,
+    role: "customer",
+    isEmailVerified: false,
+  });
+
+  return user;
+};
+
+const getCountryVisaTypeForApplication = async (payload) => {
+  if (payload.countryVisaTypeId) {
+    const found = await CountryVisaType.findById(payload.countryVisaTypeId)
+      .populate("countryId", "name slug")
+      .populate("visaCategoryId", "name slug iconKey")
+      .lean();
+
+    if (!found) {
+      throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Selected visa type configuration not found");
+    }
+
+    if (!found.isActive) {
+      throw new ApiError(422, "COUNTRY_VISA_TYPE_INACTIVE", "Selected visa type is inactive");
+    }
+
+    return found;
+  }
+
+  const countrySlug = slugify(payload.countrySlug || payload.country || payload.destinationCountry);
+  const visaTypeSlug = slugify(payload.visaTypeSlug || payload.visaType || payload.visaCategory);
+
+  if (!countrySlug || !visaTypeSlug) {
+    throw new ApiError(422, "VALIDATION_ERROR", "countrySlug and visaTypeSlug are required");
+  }
+
+  const found = await CountryVisaType.findOne({ countrySlug, visaTypeSlug })
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug iconKey")
+    .lean();
+
+  if (!found || !found.isActive) {
+    throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Selected visa type configuration not found");
+  }
+
+  return found;
+};
+
+const normalizeSubmittedDocName = (value) => slugify(value).replace(/-/g, "");
+
+const isMandatoryDocMatched = (requiredDoc, submittedDoc) => {
+  const requiredName = normalizeSubmittedDocName(requiredDoc?.name || "");
+  const candidate = normalizeSubmittedDocName(submittedDoc?.docName || submittedDoc?.fieldname || "");
+
+  if (!requiredName || !candidate) {
+    return false;
+  }
+
+  return candidate.includes(requiredName) || requiredName.includes(candidate);
+};
+
+const uploadApplicationFiles = async (files, countrySlug, visaTypeSlug) => {
+  if (!Array.isArray(files) || files.length === 0) {
+    return [];
+  }
+
+  const uploaded = [];
+  for (const file of files) {
+    // eslint-disable-next-line no-await-in-loop
+    const uploadResult = await uploadDocumentBuffer(
+      file.buffer,
+      file.mimetype,
+      `y-axis/visa-applications/${countrySlug}/${visaTypeSlug}`
+    );
+
+    uploaded.push({
+      fieldname: file.fieldname,
+      docName: trim(file.fieldname).replace(/^documents?\.?/i, "") || trim(file.originalname),
+      fileUrl: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+      uploadedAt: new Date(),
+      verificationStatus: "pending",
+      adminRemark: "",
+    });
+  }
+
+  return uploaded;
+};
+
+const buildApplicantDetails = (payload) => {
+  const parsed = parseIfJson(payload.applicantDetails, payload.applicantDetails || {});
+  const fullName = trim(payload.fullName || "");
+  const [firstNameFromFull, ...rest] = fullName.split(/\s+/).filter(Boolean);
+
+  return {
+    firstName: trim(parsed.firstName || payload.firstName || firstNameFromFull),
+    lastName: trim(parsed.lastName || payload.lastName || rest.join(" ")),
+    dob: parsed.dob || payload.dob || null,
+    gender: trim(parsed.gender || payload.gender),
+    email: trim(parsed.email || payload.email).toLowerCase(),
+    phone: trim(parsed.phone || payload.phone),
+    nationality: trim(parsed.nationality || payload.nationality),
+    passportNumber: trim(parsed.passportNumber || payload.passportNumber),
+    maritalStatus: trim(parsed.maritalStatus || payload.maritalStatus),
+    address: trim(parsed.address || payload.address),
+    travelDate: parsed.travelDate || payload.travelDate || null,
+    educationDetails: parsed.educationDetails || parseIfJson(payload.educationDetails, {}),
+    employmentDetails: parsed.employmentDetails || parseIfJson(payload.employmentDetails, {}),
+    dependentDetails: parsed.dependentDetails || parseIfJson(payload.dependentDetails, {}),
+    customFields: parsed.customFields || parseIfJson(payload.customFields, {}),
+  };
+};
+
+const normalizeCountryPayload = (payload = {}, actorId = null, options = {}) => {
+  const isUpdate = Boolean(options.isUpdate);
+  const updates = {};
+
+  if (hasOwn(payload, "name")) {
+    updates.name = trim(payload.name);
+  }
+
+  if (hasOwn(payload, "slug")) {
+    updates.slug = slugify(payload.slug);
+  } else if (!isUpdate && updates.name) {
+    updates.slug = slugify(updates.name);
+  }
+
+  if (!isUpdate) {
+    if (!updates.name) {
+      throw new ApiError(422, "VALIDATION_ERROR", "name is required");
+    }
+    if (!updates.slug) {
+      throw new ApiError(422, "VALIDATION_ERROR", "slug is required");
+    }
+  }
+
+  if (hasOwn(payload, "code")) {
+    updates.code = trim(payload.code).toUpperCase();
+  }
+
+  if (hasOwn(payload, "flagImage")) {
+    updates.flagImage = trim(payload.flagImage);
+  }
+
+  if (hasOwn(payload, "heroImage")) {
+    updates.heroImage = trim(payload.heroImage);
+    updates.imageUrl = updates.heroImage;
+  }
+
+  if (hasOwn(payload, "description")) {
+    updates.description = trim(payload.description);
+  }
+
+  if (hasOwn(payload, "isActive")) {
+    updates.isActive = Boolean(payload.isActive);
+  }
+
+  if (hasOwn(payload, "sortOrder")) {
+    updates.sortOrder = Number(payload.sortOrder) || 0;
+    updates.ranking = updates.sortOrder;
+  }
+
+  if (hasOwn(payload, "region")) {
+    updates.region = trim(payload.region);
+  }
+
+  if (hasOwn(payload, "isFeatured")) {
+    updates.isFeatured = Boolean(payload.isFeatured);
+  }
+
+  if (actorId) {
+    updates.updatedBy = actorId;
+  }
+
+  if (!isUpdate && actorId) {
+    updates.createdBy = actorId;
+  }
+
+  return updates;
+};
+
+const normalizeVisaCategoryPayload = (payload = {}, actorId = null, options = {}) => {
+  const isUpdate = Boolean(options.isUpdate);
+  const updates = {};
+
+  if (hasOwn(payload, "name")) {
+    updates.name = trim(payload.name);
+  }
+
+  if (hasOwn(payload, "slug")) {
+    updates.slug = slugify(payload.slug);
+  } else if (!isUpdate && updates.name) {
+    updates.slug = slugify(updates.name);
+  }
+
+  if (!isUpdate) {
+    if (!updates.name) {
+      throw new ApiError(422, "VALIDATION_ERROR", "name is required");
+    }
+
+    if (!updates.slug) {
+      throw new ApiError(422, "VALIDATION_ERROR", "slug is required");
+    }
+  }
+
+  if (hasOwn(payload, "description")) {
+    updates.description = trim(payload.description);
+  }
+
+  if (hasOwn(payload, "iconKey")) {
+    const normalized = slugify(payload.iconKey);
+    if (normalized && !ALLOWED_ICON_KEYS.has(normalized)) {
+      throw new ApiError(422, "INVALID_ICON_KEY", `Unsupported icon key: ${payload.iconKey}`);
+    }
+    updates.iconKey = normalized;
+  }
+
+  if (hasOwn(payload, "isActive")) {
+    updates.isActive = Boolean(payload.isActive);
+  }
+
+  if (hasOwn(payload, "sortOrder")) {
+    updates.sortOrder = Number(payload.sortOrder) || 0;
+  }
+
+  if (actorId) {
+    updates.updatedBy = actorId;
+  }
+
+  if (!isUpdate && actorId) {
+    updates.createdBy = actorId;
+  }
+
+  return updates;
+};
+
+const resolveCountryVisaTypeRelations = async (payload) => {
+  let country = null;
+  let visaCategory = null;
+
+  if (payload.countryId) {
+    country = await Country.findById(payload.countryId);
+  }
+
+  if (!country && payload.countrySlug) {
+    country = await Country.findOne({ slug: slugify(payload.countrySlug) });
+  }
+
+  if (!country && payload.countryName) {
+    country = await Country.findOne({ name: new RegExp(`^${trim(payload.countryName)}$`, "i") });
+  }
+
+  if (!country) {
+    throw new ApiError(422, "VALIDATION_ERROR", "A valid country is required");
+  }
+
+  if (payload.visaCategoryId) {
+    visaCategory = await VisaCategory.findById(payload.visaCategoryId);
+  }
+
+  if (!visaCategory && payload.visaTypeSlug) {
+    visaCategory = await VisaCategory.findOne({ slug: slugify(payload.visaTypeSlug) });
+  }
+
+  if (!visaCategory && payload.visaTypeName) {
+    visaCategory = await VisaCategory.findOne({ name: new RegExp(`^${trim(payload.visaTypeName)}$`, "i") });
+  }
+
+  if (!visaCategory && payload.visaTypeName) {
+    visaCategory = await VisaCategory.create({
+      name: trim(payload.visaTypeName),
+      slug: slugify(payload.visaTypeSlug || payload.visaTypeName),
+      isActive: true,
+      sortOrder: 0,
+    });
+  }
+
+  if (!visaCategory) {
+    throw new ApiError(422, "VALIDATION_ERROR", "A valid visa category is required");
+  }
+
+  return { country, visaCategory };
+};
+
+const normalizeCountryVisaTypePayload = async (payload = {}, actorId = null, options = {}) => {
+  const isUpdate = Boolean(options.isUpdate);
+  const updates = {};
+
+  const { country, visaCategory } = await resolveCountryVisaTypeRelations(payload);
+
+  updates.countryId = country._id;
+  updates.visaCategoryId = visaCategory._id;
+  updates.countrySlug = country.slug;
+  updates.countryName = country.name;
+  updates.visaTypeSlug = visaCategory.slug;
+  updates.visaTypeName = visaCategory.name;
+
+  if (hasOwn(payload, "title")) {
+    updates.title = trim(payload.title);
+  }
+
+  if (!isUpdate && !updates.title) {
+    updates.title = `${country.name} ${visaCategory.name}`;
+  }
+
+  if (!isUpdate && !updates.title) {
+    throw new ApiError(422, "VALIDATION_ERROR", "title is required");
+  }
+
+  if (hasOwn(payload, "badge")) {
+    updates.badge = trim(payload.badge);
+  }
+
+  if (hasOwn(payload, "subtitle")) {
+    updates.subtitle = trim(payload.subtitle);
+  }
+
+  if (hasOwn(payload, "heroImage")) {
+    updates.heroImage = trim(payload.heroImage);
+  }
+
+  if (hasOwn(payload, "iconKey")) {
+    const normalized = slugify(payload.iconKey);
+    if (normalized && !ALLOWED_ICON_KEYS.has(normalized)) {
+      throw new ApiError(422, "INVALID_ICON_KEY", `Unsupported icon key: ${payload.iconKey}`);
+    }
+    updates.iconKey = normalized;
+  }
+
+  if (hasOwn(payload, "overview")) {
+    updates.overview = trim(payload.overview);
+  }
+
+  if (hasOwn(payload, "serviceHighlights")) {
+    updates.serviceHighlights = normalizeServiceHighlights(parseIfJson(payload.serviceHighlights, payload.serviceHighlights));
+  }
+
+  if (hasOwn(payload, "eligibility")) {
+    updates.eligibility = normalizeStringArray(parseIfJson(payload.eligibility, payload.eligibility));
+  }
+
+  if (hasOwn(payload, "requiredDocs")) {
+    updates.requiredDocs = normalizeRequiredDocs(parseIfJson(payload.requiredDocs, payload.requiredDocs));
+  }
+
+  if (hasOwn(payload, "process")) {
+    updates.process = normalizeProcess(parseIfJson(payload.process, payload.process));
+  }
+
+  if (hasOwn(payload, "timeline")) {
+    updates.timeline = normalizeTimeline(parseIfJson(payload.timeline, payload.timeline));
+  }
+
+  if (hasOwn(payload, "faqs")) {
+    updates.faqs = normalizeFaqs(parseIfJson(payload.faqs, payload.faqs));
+  }
+
+  if (hasOwn(payload, "ctaTitle")) {
+    updates.ctaTitle = trim(payload.ctaTitle);
+  }
+
+  if (hasOwn(payload, "ctaText")) {
+    updates.ctaText = trim(payload.ctaText);
+  }
+
+  if (hasOwn(payload, "seoTitle")) {
+    updates.seoTitle = trim(payload.seoTitle);
+  }
+
+  if (hasOwn(payload, "seoDescription")) {
+    updates.seoDescription = trim(payload.seoDescription);
+  }
+
+  if (hasOwn(payload, "metaKeywords")) {
+    updates.metaKeywords = normalizeStringArray(parseIfJson(payload.metaKeywords, payload.metaKeywords));
+  }
+
+  if (hasOwn(payload, "isActive")) {
+    updates.isActive = Boolean(payload.isActive);
+  }
+
+  if (hasOwn(payload, "isFeatured")) {
+    updates.isFeatured = Boolean(payload.isFeatured);
+  }
+
+  if (hasOwn(payload, "sortOrder")) {
+    updates.sortOrder = Number(payload.sortOrder) || 0;
+  }
+
+  if (hasOwn(payload, "applicationEnabled")) {
+    updates.applicationEnabled = Boolean(payload.applicationEnabled);
+  }
+
+  if (hasOwn(payload, "consultationEnabled")) {
+    updates.consultationEnabled = Boolean(payload.consultationEnabled);
+  }
+
+  if (actorId) {
+    updates.updatedBy = actorId;
+  }
+
+  if (!isUpdate && actorId) {
+    updates.createdBy = actorId;
+  }
+
+  return updates;
+};
+
+const createVisaApplication = async ({ payload, files = [], actorUserId = null, source = "website" }) => {
+  const countryVisaType = await getCountryVisaTypeForApplication(payload);
+
+  if (!countryVisaType.applicationEnabled) {
+    throw new ApiError(422, "APPLICATION_DISABLED", "Application is disabled for the selected visa type");
+  }
+
+  const user = await ensureUserForApplication(payload, actorUserId);
+  const applicantDetails = buildApplicantDetails(payload);
+
+  const uploadedDocs = await uploadApplicationFiles(files, countryVisaType.countrySlug, countryVisaType.visaTypeSlug);
+
+  const parsedSubmittedDocs = parseIfJson(payload.submittedDocs, []);
+  const manuallySubmittedDocs = Array.isArray(parsedSubmittedDocs)
+    ? parsedSubmittedDocs
+        .map((item) => ({
+          requiredDocId: item?.requiredDocId || null,
+          docName: trim(item?.docName || item?.name),
+          fileUrl: trim(item?.fileUrl),
+          originalName: trim(item?.originalName),
+          mimeType: trim(item?.mimeType),
+          size: Number(item?.size) || 0,
+          uploadedAt: item?.uploadedAt || new Date(),
+          verificationStatus: item?.verificationStatus || "pending",
+          adminRemark: trim(item?.adminRemark),
+        }))
+        .filter((item) => item.fileUrl)
+    : [];
+
+  const submittedDocs = [...manuallySubmittedDocs, ...uploadedDocs].map((item) => {
+    const matchedDoc = (countryVisaType.requiredDocs || []).find((requiredDoc) => isMandatoryDocMatched(requiredDoc, item));
+
+    return {
+      ...item,
+      requiredDocId: matchedDoc?._id || item.requiredDocId || null,
+      docName: item.docName || matchedDoc?.name || item.originalName,
+    };
+  });
+
+  const mandatoryDocs = (countryVisaType.requiredDocs || []).filter((doc) => doc.isMandatory !== false);
+  const missingMandatory = mandatoryDocs.filter(
+    (requiredDoc) => !submittedDocs.some((submittedDoc) => isMandatoryDocMatched(requiredDoc, submittedDoc))
+  );
+
+  if (missingMandatory.length > 0) {
+    throw new ApiError(
+      422,
+      "MISSING_REQUIRED_DOCUMENTS",
+      `Missing mandatory documents: ${missingMandatory.map((item) => item.name).join(", ")}`
+    );
+  }
+
+  const requestedStatus = trim(payload.status);
+  const status = actorUserId && VISA_APPLICATION_STATUSES.includes(requestedStatus) ? requestedStatus : "submitted";
+
+  let created = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const applicationNumber = await generateYearlyNumber({
+      model: VisaApplication,
+      fieldName: "applicationNumber",
+      prefix: "VISA",
+      padding: 6,
+    });
+
+    try {
+      created = await VisaApplication.create({
+        applicationNumber,
+        userId: user._id,
+        countryId: countryVisaType.countryId?._id || countryVisaType.countryId,
+        visaCategoryId: countryVisaType.visaCategoryId?._id || countryVisaType.visaCategoryId,
+        countryVisaTypeId: countryVisaType._id,
+        countrySlug: countryVisaType.countrySlug,
+        visaTypeSlug: countryVisaType.visaTypeSlug,
+        status,
+        statusHistory: [
+          {
+            status,
+            note: trim(payload.initialNote) || "Application created",
+            updatedBy: actorUserId || null,
+            updatedAt: new Date(),
+          },
+        ],
+        adminNotes: "",
+        applicantDetails,
+        submittedDocs,
+        paymentStatus: payload.paymentStatus || "not_required",
+        source,
+        isArchived: false,
+        appliedAt: new Date(),
+      });
+      break;
+    } catch (error) {
+      if (error?.code === 11000 && attempt < 4) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return created;
+};
+
+const ensureOwnershipOfApplication = async (applicationId, userId) => {
+  const application = await VisaApplication.findById(applicationId);
+  if (!application) {
+    throw new ApiError(404, "APPLICATION_NOT_FOUND", "Application not found");
+  }
+
+  if (String(application.userId) !== String(userId)) {
+    throw new ApiError(403, "FORBIDDEN", "You can access only your own applications");
+  }
+
+  return application;
+};
+
+const uploadTicketFiles = async (files, userId) => {
+  if (!Array.isArray(files) || files.length === 0) {
+    return [];
+  }
+
+  const attachments = [];
+  for (const file of files) {
+    // eslint-disable-next-line no-await-in-loop
+    const uploadResult = await uploadDocumentBuffer(file.buffer, file.mimetype, `y-axis/support-tickets/${userId}`);
+
+    attachments.push({
+      fileUrl: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    });
+  }
+
+  return attachments;
+};
+
+const listPublicCountries = async (query = {}) => {
+  const filter = {
+    isActive: true,
+  };
+
+  if (query.search) {
+    filter.$or = [
+      { name: { $regex: query.search, $options: "i" } },
+      { slug: { $regex: query.search, $options: "i" } },
+      { code: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const items = await Country.find(filter).sort({ sortOrder: 1, name: 1 }).lean();
+  return items.map(buildCountryPayload);
+};
+
+const getPublicCountryBySlug = async (countrySlug) => {
+  const country = await Country.findOne({ slug: slugify(countrySlug), isActive: true }).lean();
+  if (!country) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  return buildCountryPayload(country);
+};
+
+const listPublicVisaTypesByCountry = async (countrySlug) => {
+  const country = await Country.findOne({ slug: slugify(countrySlug), isActive: true }).lean();
+  if (!country) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  const items = await CountryVisaType.find({
+    countryId: country._id,
+    isActive: true,
+  })
+    .populate("visaCategoryId", "name slug iconKey")
+    .sort({ sortOrder: 1, updatedAt: -1 })
+    .lean();
+
+  return items.map((item) => buildCountryVisaTypePayload(item));
+};
+
+const getPublicVisaTypeContent = async (countrySlug, visaTypeSlug) => {
+  const item = await CountryVisaType.findOne({
+    countrySlug: slugify(countrySlug),
+    visaTypeSlug: slugify(visaTypeSlug),
+    isActive: true,
+  })
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug iconKey")
+    .lean();
+
+  if (!item) {
+    throw new ApiError(404, "VISA_TYPE_NOT_FOUND", "Visa type not found");
+  }
+
+  return buildCountryVisaTypePayload(item);
+};
+
+const getPublicApplicationConfig = async (countrySlug, visaTypeSlug) => {
+  const item = await CountryVisaType.findOne({
+    countrySlug: slugify(countrySlug),
+    visaTypeSlug: slugify(visaTypeSlug),
+    isActive: true,
+  })
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug iconKey")
+    .lean();
+
+  if (!item) {
+    throw new ApiError(404, "VISA_TYPE_NOT_FOUND", "Visa type not found");
+  }
+
+  if (!item.applicationEnabled) {
+    throw new ApiError(422, "APPLICATION_DISABLED", "Application flow is disabled for this visa type");
+  }
+
+  return {
+    countrySlug: item.countrySlug,
+    visaTypeSlug: item.visaTypeSlug,
+    title: item.title,
+    subtitle: item.subtitle || "",
+    summary: item.overview || item.subtitle || "",
+    requiredDocs: Array.isArray(item.requiredDocs) ? item.requiredDocs : [],
+    applicantFields: [
+      { key: "firstName", label: "First Name", type: "text", required: true },
+      { key: "lastName", label: "Last Name", type: "text", required: true },
+      { key: "email", label: "Email", type: "email", required: true },
+      { key: "phone", label: "Phone", type: "text", required: true },
+      { key: "nationality", label: "Nationality", type: "text", required: true },
+      { key: "passportNumber", label: "Passport Number", type: "text", required: false },
+      { key: "address", label: "Address", type: "textarea", required: false },
+    ],
+    applicationEnabled: item.applicationEnabled !== false,
+    consultationEnabled: item.consultationEnabled !== false,
+  };
+};
+
+const searchPublicVisaTypes = async (query = {}) => {
+  const filter = { isActive: true };
+
+  if (query.country) {
+    filter.countrySlug = slugify(query.country);
+  }
+
+  if (query.type) {
+    filter.visaTypeSlug = slugify(query.type);
+  }
+
+  const items = await CountryVisaType.find(filter)
+    .select("countrySlug visaTypeSlug countryName visaTypeName title subtitle iconKey badge sortOrder")
+    .sort({ sortOrder: 1, title: 1 })
+    .lean();
+
+  return items.map((item) => buildCountryVisaTypePayload(item));
+};
+
+const createPublicEnquiry = async (payload, actorUserId = null) => {
+  const userId = actorUserId || null;
+
+  let created = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const enquiryNumber = await generateYearlyNumber({
+      model: Enquiry,
+      fieldName: "enquiryNumber",
+      prefix: "ENQ",
+      padding: 6,
+    });
+
+    try {
+      created = await Enquiry.create({
+        enquiryNumber,
+        userId,
+        name: trim(payload.name),
+        email: trim(payload.email).toLowerCase(),
+        phone: trim(payload.phone),
+        countryOfInterest: trim(payload.countryOfInterest),
+        visaInterestType: trim(payload.visaInterestType || payload.visaType),
+        enquiryType: ENQUIRY_TYPES.includes(payload.enquiryType) ? payload.enquiryType : "general_visa_help",
+        message: trim(payload.message),
+        preferredContactMethod: trim(payload.preferredContactMethod),
+        pageSource: trim(payload.pageSource),
+        status: "new",
+        adminNotes: "",
+      });
+      break;
+    } catch (error) {
+      if (error?.code === 11000 && attempt < 4) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return created;
+};
+
+const listUserApplications = async (userId, query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = { userId };
+
+  if (query.status) {
+    filter.status = query.status;
+  }
+
+  if (query.countrySlug) {
+    filter.countrySlug = slugify(query.countrySlug);
+  }
+
+  if (query.visaTypeSlug) {
+    filter.visaTypeSlug = slugify(query.visaTypeSlug);
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { applicationNumber: { $regex: query.search, $options: "i" } },
+      { "applicantDetails.firstName": { $regex: query.search, $options: "i" } },
+      { "applicantDetails.lastName": { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    VisaApplication.find(filter)
+      .populate("countryId", "name slug")
+      .populate("visaCategoryId", "name slug")
+      .populate("countryVisaTypeId", "title countrySlug visaTypeSlug")
+      .sort({ appliedAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    VisaApplication.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getUserApplicationById = async (userId, applicationId) => {
+  const item = await VisaApplication.findOne({ _id: applicationId, userId })
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug")
+    .populate("countryVisaTypeId", "title countrySlug visaTypeSlug requiredDocs")
+    .lean();
+
+  if (!item) {
+    throw new ApiError(404, "APPLICATION_NOT_FOUND", "Application not found");
+  }
+
+  return item;
+};
+
+const createUserApplication = async (userId, payload, files = []) => {
+  return createVisaApplication({
+    payload,
+    files,
+    actorUserId: userId,
+    source: "dashboard",
+  });
+};
+
+const listUserTickets = async (userId, query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = { userId };
+
+  if (query.status) {
+    filter.status = query.status;
+  }
+
+  if (query.priority) {
+    filter.priority = query.priority;
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { ticketNumber: { $regex: query.search, $options: "i" } },
+      { subject: { $regex: query.search, $options: "i" } },
+      { description: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    SupportTicket.find(filter)
+      .populate("applicationId", "applicationNumber status countrySlug visaTypeSlug")
+      .sort({ updatedAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    SupportTicket.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const createUserTicket = async (userId, payload, files = []) => {
+  if (payload.applicationId) {
+    await ensureOwnershipOfApplication(payload.applicationId, userId);
+  }
+
+  const attachments = await uploadTicketFiles(files, userId);
+
+  let ticket = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const ticketNumber = await generateYearlyNumber({
+      model: SupportTicket,
+      fieldName: "ticketNumber",
+      prefix: "TKT",
+      padding: 5,
+    });
+
+    try {
+      ticket = await SupportTicket.create({
+        ticketNumber,
+        userId,
+        applicationId: payload.applicationId || null,
+        category: TICKET_CATEGORIES.includes(payload.category) ? payload.category : "general_support",
+        subject: trim(payload.subject),
+        description: trim(payload.description),
+        attachments,
+        status: "open",
+        priority: TICKET_PRIORITIES.includes(payload.priority) ? payload.priority : "medium",
+        replies: [],
+        assignedTo: payload.assignedTo || null,
+      });
+      break;
+    } catch (error) {
+      if (error?.code === 11000 && attempt < 4) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return ticket;
+};
+
+const getUserTicketById = async (userId, ticketId) => {
+  const ticket = await SupportTicket.findOne({ _id: ticketId, userId })
+    .populate("applicationId", "applicationNumber status")
+    .populate("replies.senderId", "firstName lastName email role")
+    .lean();
+
+  if (!ticket) {
+    throw new ApiError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+
+  return ticket;
+};
+
+const replyToUserTicket = async (userId, ticketId, payload, files = []) => {
+  const ticket = await SupportTicket.findOne({ _id: ticketId, userId });
+  if (!ticket) {
+    throw new ApiError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+
+  if (ticket.status === "closed") {
+    throw new ApiError(422, "TICKET_CLOSED", "Ticket is closed");
+  }
+
+  const attachments = await uploadTicketFiles(files, userId);
+
+  ticket.replies.push({
+    senderType: "user",
+    senderId: userId,
+    message: trim(payload.message),
+    attachments,
+    createdAt: new Date(),
+  });
+
+  if (ticket.status === "resolved") {
+    ticket.status = "in_progress";
+  }
+
+  await ticket.save();
+  return ticket;
+};
+
+const getUserDashboardSummary = async (userId) => {
+  const [
+    totalApplications,
+    activeApplications,
+    completedApplications,
+    openSupportTickets,
+  ] = await Promise.all([
+    VisaApplication.countDocuments({ userId }),
+    VisaApplication.countDocuments({
+      userId,
+      status: { $in: ["submitted", "under_review", "documents_requested", "documents_received", "in_process", "on_hold"] },
+    }),
+    VisaApplication.countDocuments({ userId, status: { $in: ["approved", "completed"] } }),
+    SupportTicket.countDocuments({ userId, status: { $in: ["open", "in_progress"] } }),
+  ]);
+
+  return {
+    totalApplications,
+    activeApplications,
+    completedApplications,
+    openSupportTickets,
+  };
+};
+
+const listAdminCountries = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.isActive !== undefined && query.isActive !== "") {
+    filter.isActive = String(query.isActive) === "true";
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { name: { $regex: query.search, $options: "i" } },
+      { slug: { $regex: query.search, $options: "i" } },
+      { code: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    Country.find(filter).sort({ sortOrder: 1, name: 1 }).skip(skip).limit(limit).lean(),
+    Country.countDocuments(filter),
+  ]);
+
+  return {
+    items: items.map(buildCountryPayload),
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminCountryById = async (countryId) => {
+  const country = await Country.findById(countryId).lean();
+  if (!country) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  return buildCountryPayload(country);
+};
+
+const createAdminCountry = async (payload, actorId) => {
+  const normalized = normalizeCountryPayload(payload, actorId);
+
+  const existing = await Country.findOne({ slug: normalized.slug }).lean();
+  if (existing) {
+    throw new ApiError(409, "DUPLICATE_COUNTRY", "Country slug already exists");
+  }
+
+  const created = await Country.create(normalized);
+  return buildCountryPayload(created);
+};
+
+const updateAdminCountry = async (countryId, payload, actorId) => {
+  const normalized = normalizeCountryPayload(payload, actorId, { isUpdate: true });
+
+  if (normalized.slug) {
+    const existing = await Country.findOne({ slug: normalized.slug, _id: { $ne: countryId } }).lean();
+    if (existing) {
+      throw new ApiError(409, "DUPLICATE_COUNTRY", "Country slug already exists");
+    }
+  }
+
+  const updated = await Country.findByIdAndUpdate(countryId, normalized, {
+    new: true,
+    runValidators: true,
+  }).lean();
+
+  if (!updated) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  return buildCountryPayload(updated);
+};
+
+const updateAdminCountryStatus = async (countryId, payload, actorId) => {
+  if (typeof payload.isActive !== "boolean") {
+    throw new ApiError(422, "VALIDATION_ERROR", "isActive must be a boolean");
+  }
+
+  const updated = await Country.findByIdAndUpdate(
+    countryId,
+    {
+      isActive: payload.isActive,
+      updatedBy: actorId || null,
+    },
+    { new: true, runValidators: true }
+  ).lean();
+
+  if (!updated) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  return buildCountryPayload(updated);
+};
+
+const deleteAdminCountry = async (countryId) => {
+  const linked = await CountryVisaType.countDocuments({ countryId });
+  if (linked > 0) {
+    throw new ApiError(409, "COUNTRY_IN_USE", "Country cannot be deleted while visa types are mapped to it");
+  }
+
+  const deleted = await Country.findByIdAndDelete(countryId).lean();
+  if (!deleted) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  return { deleted: true, countryId };
+};
+
+const listAdminVisaCategories = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.isActive !== undefined && query.isActive !== "") {
+    filter.isActive = String(query.isActive) === "true";
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { name: { $regex: query.search, $options: "i" } },
+      { slug: { $regex: query.search, $options: "i" } },
+      { description: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    VisaCategory.find(filter).sort({ sortOrder: 1, name: 1 }).skip(skip).limit(limit).lean(),
+    VisaCategory.countDocuments(filter),
+  ]);
+
+  return {
+    items: items.map(buildVisaCategoryPayload),
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminVisaCategoryById = async (visaCategoryId) => {
+  const item = await VisaCategory.findById(visaCategoryId).lean();
+  if (!item) {
+    throw new ApiError(404, "VISA_CATEGORY_NOT_FOUND", "Visa category not found");
+  }
+
+  return buildVisaCategoryPayload(item);
+};
+
+const createAdminVisaCategory = async (payload, actorId) => {
+  const normalized = normalizeVisaCategoryPayload(payload, actorId);
+
+  const existing = await VisaCategory.findOne({ slug: normalized.slug }).lean();
+  if (existing) {
+    throw new ApiError(409, "DUPLICATE_VISA_CATEGORY", "Visa category slug already exists");
+  }
+
+  const item = await VisaCategory.create(normalized);
+  return buildVisaCategoryPayload(item);
+};
+
+const updateAdminVisaCategory = async (visaCategoryId, payload, actorId) => {
+  const normalized = normalizeVisaCategoryPayload(payload, actorId, { isUpdate: true });
+
+  if (normalized.slug) {
+    const existing = await VisaCategory.findOne({ slug: normalized.slug, _id: { $ne: visaCategoryId } }).lean();
+    if (existing) {
+      throw new ApiError(409, "DUPLICATE_VISA_CATEGORY", "Visa category slug already exists");
+    }
+  }
+
+  const item = await VisaCategory.findByIdAndUpdate(visaCategoryId, normalized, {
+    new: true,
+    runValidators: true,
+  }).lean();
+
+  if (!item) {
+    throw new ApiError(404, "VISA_CATEGORY_NOT_FOUND", "Visa category not found");
+  }
+
+  return buildVisaCategoryPayload(item);
+};
+
+const updateAdminVisaCategoryStatus = async (visaCategoryId, payload, actorId) => {
+  if (typeof payload.isActive !== "boolean") {
+    throw new ApiError(422, "VALIDATION_ERROR", "isActive must be a boolean");
+  }
+
+  const item = await VisaCategory.findByIdAndUpdate(
+    visaCategoryId,
+    {
+      isActive: payload.isActive,
+      updatedBy: actorId || null,
+    },
+    { new: true, runValidators: true }
+  ).lean();
+
+  if (!item) {
+    throw new ApiError(404, "VISA_CATEGORY_NOT_FOUND", "Visa category not found");
+  }
+
+  return buildVisaCategoryPayload(item);
+};
+
+const deleteAdminVisaCategory = async (visaCategoryId) => {
+  const linked = await CountryVisaType.countDocuments({ visaCategoryId });
+  if (linked > 0) {
+    throw new ApiError(409, "VISA_CATEGORY_IN_USE", "Visa category cannot be deleted while linked to country visa types");
+  }
+
+  const item = await VisaCategory.findByIdAndDelete(visaCategoryId).lean();
+  if (!item) {
+    throw new ApiError(404, "VISA_CATEGORY_NOT_FOUND", "Visa category not found");
+  }
+
+  return { deleted: true, visaCategoryId };
+};
+
+const listAdminCountryVisaTypes = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.countryId) {
+    filter.countryId = query.countryId;
+  }
+
+  if (query.countrySlug) {
+    filter.countrySlug = slugify(query.countrySlug);
+  }
+
+  if (query.visaCategoryId) {
+    filter.visaCategoryId = query.visaCategoryId;
+  }
+
+  if (query.visaTypeSlug) {
+    filter.visaTypeSlug = slugify(query.visaTypeSlug);
+  }
+
+  if (query.isActive !== undefined && query.isActive !== "") {
+    filter.isActive = String(query.isActive) === "true";
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { title: { $regex: query.search, $options: "i" } },
+      { countryName: { $regex: query.search, $options: "i" } },
+      { visaTypeName: { $regex: query.search, $options: "i" } },
+      { countrySlug: { $regex: query.search, $options: "i" } },
+      { visaTypeSlug: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    CountryVisaType.find(filter)
+      .populate("countryId", "name slug")
+      .populate("visaCategoryId", "name slug iconKey")
+      .sort({ sortOrder: 1, updatedAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    CountryVisaType.countDocuments(filter),
+  ]);
+
+  return {
+    items: items.map((item) => buildCountryVisaTypePayload(item, { includeAdminFields: true })),
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminCountryVisaTypeById = async (countryVisaTypeId) => {
+  const item = await CountryVisaType.findById(countryVisaTypeId)
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug iconKey");
+
+  if (!item) {
+    throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Country visa type not found");
+  }
+
+  return buildCountryVisaTypePayload(item, { includeAdminFields: true });
+};
+
+const createAdminCountryVisaType = async (payload, actorId) => {
+  const normalized = await normalizeCountryVisaTypePayload(payload, actorId);
+
+  const existing = await CountryVisaType.findOne({
+    countryId: normalized.countryId,
+    visaCategoryId: normalized.visaCategoryId,
+  }).lean();
+
+  if (existing) {
+    throw new ApiError(409, "DUPLICATE_COUNTRY_VISA_TYPE", "Country + visa category mapping already exists");
+  }
+
+  let created = null;
+  try {
+    created = await CountryVisaType.create(normalized);
+  } catch (error) {
+    if (error?.code === 11000) {
+      throw new ApiError(409, "DUPLICATE_COUNTRY_VISA_TYPE", "Country + visa category mapping already exists");
+    }
+    throw error;
+  }
+
+  const populated = await CountryVisaType.findById(created._id)
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug iconKey");
+
+  return buildCountryVisaTypePayload(populated, { includeAdminFields: true });
+};
+
+const updateAdminCountryVisaType = async (countryVisaTypeId, payload, actorId) => {
+  const existing = await CountryVisaType.findById(countryVisaTypeId);
+  if (!existing) {
+    throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Country visa type not found");
+  }
+
+  const normalized = await normalizeCountryVisaTypePayload(
+    {
+      ...existing.toObject(),
+      ...payload,
+      countryId: payload.countryId || existing.countryId,
+      visaCategoryId: payload.visaCategoryId || existing.visaCategoryId,
+    },
+    actorId,
+    { isUpdate: true }
+  );
+
+  const duplicate = await CountryVisaType.findOne({
+    _id: { $ne: countryVisaTypeId },
+    countryId: normalized.countryId,
+    visaCategoryId: normalized.visaCategoryId,
+  }).lean();
+
+  if (duplicate) {
+    throw new ApiError(409, "DUPLICATE_COUNTRY_VISA_TYPE", "Country + visa category mapping already exists");
+  }
+
+  let updated = null;
+  try {
+    updated = await CountryVisaType.findByIdAndUpdate(countryVisaTypeId, normalized, {
+      new: true,
+      runValidators: true,
+    })
+      .populate("countryId", "name slug")
+      .populate("visaCategoryId", "name slug iconKey");
+  } catch (error) {
+    if (error?.code === 11000) {
+      throw new ApiError(409, "DUPLICATE_COUNTRY_VISA_TYPE", "Country + visa category mapping already exists");
+    }
+    throw error;
+  }
+
+  return buildCountryVisaTypePayload(updated, { includeAdminFields: true });
+};
+
+const updateAdminCountryVisaTypeStatus = async (countryVisaTypeId, payload, actorId) => {
+  const updates = {
+    updatedBy: actorId || null,
+  };
+
+  if (typeof payload.isActive === "boolean") {
+    updates.isActive = payload.isActive;
+  }
+
+  if (typeof payload.applicationEnabled === "boolean") {
+    updates.applicationEnabled = payload.applicationEnabled;
+  }
+
+  if (typeof payload.consultationEnabled === "boolean") {
+    updates.consultationEnabled = payload.consultationEnabled;
+  }
+
+  const item = await CountryVisaType.findByIdAndUpdate(countryVisaTypeId, updates, {
+    new: true,
+    runValidators: true,
+  })
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug iconKey");
+
+  if (!item) {
+    throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Country visa type not found");
+  }
+
+  return buildCountryVisaTypePayload(item, { includeAdminFields: true });
+};
+
+const deleteAdminCountryVisaType = async (countryVisaTypeId) => {
+  const linkedApps = await VisaApplication.countDocuments({ countryVisaTypeId });
+  if (linkedApps > 0) {
+    throw new ApiError(409, "COUNTRY_VISA_TYPE_IN_USE", "Cannot delete visa type while applications exist");
+  }
+
+  const item = await CountryVisaType.findByIdAndDelete(countryVisaTypeId).lean();
+  if (!item) {
+    throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Country visa type not found");
+  }
+
+  return { deleted: true, countryVisaTypeId };
+};
+
+const listAdminApplications = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.countryId) {
+    filter.countryId = query.countryId;
+  }
+
+  if (query.visaCategoryId) {
+    filter.visaCategoryId = query.visaCategoryId;
+  }
+
+  if (query.status) {
+    filter.status = query.status;
+  }
+
+  if (query.dateFrom || query.dateTo) {
+    filter.appliedAt = {};
+    if (query.dateFrom) {
+      filter.appliedAt.$gte = new Date(query.dateFrom);
+    }
+    if (query.dateTo) {
+      filter.appliedAt.$lte = new Date(query.dateTo);
+    }
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { applicationNumber: { $regex: query.search, $options: "i" } },
+      { "applicantDetails.firstName": { $regex: query.search, $options: "i" } },
+      { "applicantDetails.lastName": { $regex: query.search, $options: "i" } },
+      { "applicantDetails.email": { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    VisaApplication.find(filter)
+      .populate("userId", "firstName lastName email phone")
+      .populate("countryId", "name slug")
+      .populate("visaCategoryId", "name slug")
+      .populate("countryVisaTypeId", "title")
+      .sort({ appliedAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    VisaApplication.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminApplicationById = async (applicationId) => {
+  const item = await VisaApplication.findById(applicationId)
+    .populate("userId", "firstName lastName email phone")
+    .populate("countryId", "name slug")
+    .populate("visaCategoryId", "name slug")
+    .populate("countryVisaTypeId", "title requiredDocs")
+    .lean();
+
+  if (!item) {
+    throw new ApiError(404, "APPLICATION_NOT_FOUND", "Application not found");
+  }
+
+  return item;
+};
+
+const updateAdminApplicationStatus = async (applicationId, payload, actorId) => {
+  if (!VISA_APPLICATION_STATUSES.includes(payload.status)) {
+    throw new ApiError(422, "VALIDATION_ERROR", "Invalid application status");
+  }
+
+  const item = await VisaApplication.findById(applicationId);
+  if (!item) {
+    throw new ApiError(404, "APPLICATION_NOT_FOUND", "Application not found");
+  }
+
+  item.status = payload.status;
+  item.statusHistory.push({
+    status: payload.status,
+    note: trim(payload.note),
+    updatedBy: actorId || null,
+    updatedAt: new Date(),
+  });
+
+  if (hasOwn(payload, "adminNotes")) {
+    item.adminNotes = trim(payload.adminNotes);
+  }
+
+  await item.save();
+  return item;
+};
+
+const updateAdminApplicationNotes = async (applicationId, payload) => {
+  const item = await VisaApplication.findByIdAndUpdate(
+    applicationId,
+    { adminNotes: trim(payload.adminNotes) },
+    { new: true, runValidators: true }
+  );
+
+  if (!item) {
+    throw new ApiError(404, "APPLICATION_NOT_FOUND", "Application not found");
+  }
+
+  return item;
+};
+
+const archiveAdminApplication = async (applicationId) => {
+  const item = await VisaApplication.findByIdAndUpdate(
+    applicationId,
+    { isArchived: true },
+    { new: true, runValidators: true }
+  ).lean();
+
+  if (!item) {
+    throw new ApiError(404, "APPLICATION_NOT_FOUND", "Application not found");
+  }
+
+  return { archived: true, applicationId: item._id };
+};
+
+const listAdminEnquiries = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.status) {
+    filter.status = query.status;
+  }
+
+  if (query.enquiryType) {
+    filter.enquiryType = query.enquiryType;
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { enquiryNumber: { $regex: query.search, $options: "i" } },
+      { name: { $regex: query.search, $options: "i" } },
+      { email: { $regex: query.search, $options: "i" } },
+      { phone: { $regex: query.search, $options: "i" } },
+      { countryOfInterest: { $regex: query.search, $options: "i" } },
+      { visaInterestType: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    Enquiry.find(filter)
+      .populate("userId", "firstName lastName email")
+      .populate("assignedTo", "firstName lastName email")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    Enquiry.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminEnquiryById = async (enquiryId) => {
+  const item = await Enquiry.findById(enquiryId)
+    .populate("userId", "firstName lastName email")
+    .populate("assignedTo", "firstName lastName email")
+    .lean();
+
+  if (!item) {
+    throw new ApiError(404, "ENQUIRY_NOT_FOUND", "Enquiry not found");
+  }
+
+  return item;
+};
+
+const updateAdminEnquiryStatus = async (enquiryId, payload) => {
+  if (!ENQUIRY_STATUSES.includes(payload.status)) {
+    throw new ApiError(422, "VALIDATION_ERROR", "Invalid enquiry status");
+  }
+
+  const item = await Enquiry.findByIdAndUpdate(
+    enquiryId,
+    {
+      status: payload.status,
+      assignedTo: payload.assignedTo || undefined,
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (!item) {
+    throw new ApiError(404, "ENQUIRY_NOT_FOUND", "Enquiry not found");
+  }
+
+  return item;
+};
+
+const updateAdminEnquiryNotes = async (enquiryId, payload) => {
+  const item = await Enquiry.findByIdAndUpdate(
+    enquiryId,
+    { adminNotes: trim(payload.adminNotes) },
+    { new: true, runValidators: true }
+  );
+
+  if (!item) {
+    throw new ApiError(404, "ENQUIRY_NOT_FOUND", "Enquiry not found");
+  }
+
+  return item;
+};
+
+const deleteAdminEnquiry = async (enquiryId) => {
+  const item = await Enquiry.findByIdAndDelete(enquiryId).lean();
+  if (!item) {
+    throw new ApiError(404, "ENQUIRY_NOT_FOUND", "Enquiry not found");
+  }
+
+  return { deleted: true, enquiryId };
+};
+
+const listAdminTickets = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.status) {
+    filter.status = query.status;
+  }
+
+  if (query.priority) {
+    filter.priority = query.priority;
+  }
+
+  if (query.category) {
+    filter.category = query.category;
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { ticketNumber: { $regex: query.search, $options: "i" } },
+      { subject: { $regex: query.search, $options: "i" } },
+      { description: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    SupportTicket.find(filter)
+      .populate("userId", "firstName lastName email")
+      .populate("applicationId", "applicationNumber status")
+      .populate("assignedTo", "firstName lastName email")
+      .sort({ updatedAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    SupportTicket.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminTicketById = async (ticketId) => {
+  const item = await SupportTicket.findById(ticketId)
+    .populate("userId", "firstName lastName email phone")
+    .populate("applicationId", "applicationNumber status countrySlug visaTypeSlug")
+    .populate("assignedTo", "firstName lastName email")
+    .populate("replies.senderId", "firstName lastName email role")
+    .lean();
+
+  if (!item) {
+    throw new ApiError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+
+  return item;
+};
+
+const updateAdminTicketStatus = async (ticketId, payload) => {
+  if (!TICKET_STATUSES.includes(payload.status)) {
+    throw new ApiError(422, "VALIDATION_ERROR", "Invalid ticket status");
+  }
+
+  const updates = {
+    status: payload.status,
+  };
+
+  if (payload.priority) {
+    if (!TICKET_PRIORITIES.includes(payload.priority)) {
+      throw new ApiError(422, "VALIDATION_ERROR", "Invalid ticket priority");
+    }
+    updates.priority = payload.priority;
+  }
+
+  if (hasOwn(payload, "assignedTo")) {
+    updates.assignedTo = payload.assignedTo || null;
+  }
+
+  const item = await SupportTicket.findByIdAndUpdate(ticketId, updates, {
+    new: true,
+    runValidators: true,
+  });
+
+  if (!item) {
+    throw new ApiError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+
+  return item;
+};
+
+const replyToAdminTicket = async (ticketId, payload, actorId, files = []) => {
+  const ticket = await SupportTicket.findById(ticketId);
+  if (!ticket) {
+    throw new ApiError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+
+  const attachments = await uploadTicketFiles(files, actorId || "admin");
+
+  ticket.replies.push({
+    senderType: "admin",
+    senderId: actorId,
+    message: trim(payload.message),
+    attachments,
+    createdAt: new Date(),
+  });
+
+  if (ticket.status === "open") {
+    ticket.status = "in_progress";
+  }
+
+  await ticket.save();
+  return ticket;
+};
+
+const listAdminUsers = async (query = {}) => {
+  const { page, limit, skip } = getPagination(query);
+  const filter = {};
+
+  if (query.isActive !== undefined && query.isActive !== "") {
+    filter.isActive = String(query.isActive) === "true";
+  }
+
+  if (query.search) {
+    filter.$or = [
+      { firstName: { $regex: query.search, $options: "i" } },
+      { lastName: { $regex: query.search, $options: "i" } },
+      { email: { $regex: query.search, $options: "i" } },
+      { phone: { $regex: query.search, $options: "i" } },
+    ];
+  }
+
+  const [items, total] = await Promise.all([
+    User.find(filter)
+      .select("firstName lastName fullName email phone role isActive isDeleted createdAt updatedAt")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    User.countDocuments(filter),
+  ]);
+
+  const userIds = items.map((item) => item._id);
+
+  const [applicationCounts, ticketCounts, enquiryCounts] = await Promise.all([
+    VisaApplication.aggregate([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: "$userId", total: { $sum: 1 } } },
+    ]),
+    SupportTicket.aggregate([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: "$userId", total: { $sum: 1 } } },
+    ]),
+    Enquiry.aggregate([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: "$userId", total: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const applicationMap = new Map(applicationCounts.map((item) => [String(item._id), item.total]));
+  const ticketMap = new Map(ticketCounts.map((item) => [String(item._id), item.total]));
+  const enquiryMap = new Map(enquiryCounts.map((item) => [String(item._id), item.total]));
+
+  return {
+    items: items.map((item) => ({
+      ...item,
+      totalApplications: applicationMap.get(String(item._id)) || 0,
+      totalTickets: ticketMap.get(String(item._id)) || 0,
+      totalEnquiries: enquiryMap.get(String(item._id)) || 0,
+    })),
+    pagination: getPaginationMeta(page, limit, total),
+  };
+};
+
+const getAdminUserById = async (userId) => {
+  const user = await User.findById(userId)
+    .select("firstName lastName fullName email phone role country profile isActive isDeleted createdAt updatedAt")
+    .lean();
+
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  const [applications, tickets, enquiries] = await Promise.all([
+    VisaApplication.find({ userId })
+      .select("applicationNumber status countrySlug visaTypeSlug appliedAt")
+      .sort({ appliedAt: -1 })
+      .limit(50)
+      .lean(),
+    SupportTicket.find({ userId })
+      .select("ticketNumber status priority category updatedAt")
+      .sort({ updatedAt: -1 })
+      .limit(50)
+      .lean(),
+    Enquiry.find({ userId })
+      .select("enquiryNumber status enquiryType pageSource createdAt")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean(),
+  ]);
+
+  return {
+    ...user,
+    applications,
+    tickets,
+    enquiries,
+  };
+};
+
+const updateAdminUserStatus = async (userId, payload) => {
+  const updates = {};
+
+  if (hasOwn(payload, "isActive")) {
+    updates.isActive = Boolean(payload.isActive);
+  }
+
+  if (hasOwn(payload, "isDeleted")) {
+    updates.isDeleted = Boolean(payload.isDeleted);
+    updates.deletedAt = updates.isDeleted ? new Date() : null;
+    if (updates.isDeleted) {
+      updates.isActive = false;
+    }
+  }
+
+  if (hasOwn(payload, "role")) {
+    updates.role = trim(payload.role);
+  }
+
+  const user = await User.findByIdAndUpdate(userId, updates, {
+    new: true,
+    runValidators: true,
+  })
+    .select("firstName lastName fullName email phone role isActive isDeleted createdAt updatedAt")
+    .lean();
+
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  return user;
+};
+
+const deleteAdminUser = async (userId, options = {}) => {
+  const hardDelete = Boolean(options.hardDelete);
+
+  if (hardDelete) {
+    const user = await User.findByIdAndDelete(userId).lean();
+    if (!user) {
+      throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+    }
+
+    return { deleted: true, hardDelete: true, userId };
+  }
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    {
+      isDeleted: true,
+      isActive: false,
+      deletedAt: new Date(),
+    },
+    { new: true, runValidators: true }
+  ).lean();
+
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  return { deleted: true, hardDelete: false, userId };
+};
+
+const getAdminDashboardSummary = async () => {
+  const [
+    totalCountries,
+    totalVisaCategories,
+    totalCountryVisaTypes,
+    totalApplications,
+    activeApplications,
+    totalEnquiries,
+    newEnquiries,
+    totalTickets,
+    openTickets,
+    totalUsers,
+    activeUsers,
+  ] = await Promise.all([
+    Country.countDocuments({}),
+    VisaCategory.countDocuments({}),
+    CountryVisaType.countDocuments({}),
+    VisaApplication.countDocuments({}),
+    VisaApplication.countDocuments({ status: { $in: ["submitted", "under_review", "in_process", "documents_requested"] } }),
+    Enquiry.countDocuments({}),
+    Enquiry.countDocuments({ status: "new" }),
+    SupportTicket.countDocuments({}),
+    SupportTicket.countDocuments({ status: { $in: ["open", "in_progress"] } }),
+    User.countDocuments({}),
+    User.countDocuments({ isActive: true, isDeleted: { $ne: true } }),
+  ]);
+
+  return {
+    totalCountries,
+    totalVisaCategories,
+    totalCountryVisaTypes,
+    totalApplications,
+    activeApplications,
+    totalEnquiries,
+    newEnquiries,
+    totalTickets,
+    openTickets,
+    totalUsers,
+    activeUsers,
+  };
+};
+
+module.exports = {
+  ALLOWED_ICON_KEYS,
+  ENQUIRY_STATUSES,
+  ENQUIRY_TYPES,
+  TICKET_CATEGORIES,
+  TICKET_PRIORITIES,
+  TICKET_STATUSES,
+  VISA_APPLICATION_STATUSES,
+  listPublicCountries,
+  getPublicCountryBySlug,
+  listPublicVisaTypesByCountry,
+  getPublicVisaTypeContent,
+  getPublicApplicationConfig,
+  searchPublicVisaTypes,
+  createVisaApplication,
+  createPublicEnquiry,
+  listUserApplications,
+  getUserApplicationById,
+  createUserApplication,
+  listUserTickets,
+  createUserTicket,
+  getUserTicketById,
+  replyToUserTicket,
+  getUserDashboardSummary,
+  listAdminCountries,
+  getAdminCountryById,
+  createAdminCountry,
+  updateAdminCountry,
+  updateAdminCountryStatus,
+  deleteAdminCountry,
+  listAdminVisaCategories,
+  getAdminVisaCategoryById,
+  createAdminVisaCategory,
+  updateAdminVisaCategory,
+  updateAdminVisaCategoryStatus,
+  deleteAdminVisaCategory,
+  listAdminCountryVisaTypes,
+  getAdminCountryVisaTypeById,
+  createAdminCountryVisaType,
+  updateAdminCountryVisaType,
+  updateAdminCountryVisaTypeStatus,
+  deleteAdminCountryVisaType,
+  listAdminApplications,
+  getAdminApplicationById,
+  updateAdminApplicationStatus,
+  updateAdminApplicationNotes,
+  archiveAdminApplication,
+  listAdminEnquiries,
+  getAdminEnquiryById,
+  updateAdminEnquiryStatus,
+  updateAdminEnquiryNotes,
+  deleteAdminEnquiry,
+  listAdminTickets,
+  getAdminTicketById,
+  updateAdminTicketStatus,
+  replyToAdminTicket,
+  listAdminUsers,
+  getAdminUserById,
+  updateAdminUserStatus,
+  deleteAdminUser,
+  getAdminDashboardSummary,
+};

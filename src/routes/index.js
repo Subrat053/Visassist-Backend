@@ -13,7 +13,9 @@ const publicRoutes = require("./public.routes.js");
 const studyRoutes = require("./study.routes.js");
 const successStoryRoutes = require("./successStory.routes.js");
 const userRoutes = require("./user.routes.js");
+const visaTypeRoutes = require("./visaType.routes.js");
 const visaassistRoutes = require("./visaassist.routes.js");
+const { getVisaCountriesWithTypes } = require("../controllers/visaType.controller.js");
 
 const router = Router();
 
@@ -32,5 +34,7 @@ router.use("/payments", paymentRoutes);
 router.use("/public", publicRoutes);
 router.use("/success-stories", successStoryRoutes);
 router.use("/visaassist", visaassistRoutes);
+router.use("/visa-types", visaTypeRoutes);
+router.get("/visa-countries-with-types", getVisaCountriesWithTypes);
 
 module.exports = router;
