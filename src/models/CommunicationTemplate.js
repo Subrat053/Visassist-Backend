@@ -5,6 +5,7 @@ const communicationTemplateSchema = new mongoose.Schema(
   {
     key: { type: String, required: true, trim: true, unique: true, index: true },
     name: { type: String, required: true, trim: true },
+    type: { type: String, default: "email", index: true },
     channel: { type: String, enum: TEMPLATE_CHANNELS, required: true, index: true },
     subject: { type: String, default: "" },
     body: { type: String, required: true },

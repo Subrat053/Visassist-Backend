@@ -39,6 +39,7 @@ const userSchema = new mongoose.Schema(
 		role: {
 			type: String,
 			enum: [
+				"customer",
 				"user",
 				"admin",
 				"adviser",
@@ -48,8 +49,12 @@ const userSchema = new mongoose.Schema(
 				"support_executive",
 				"destination_specialist",
 			],
-			default: "user",
+			default: "customer",
 			index: true,
+		},
+		fullName: {
+			type: String,
+			trim: true,
 		},
 		avatarUrl: {
 			type: String,
@@ -74,6 +79,10 @@ const userSchema = new mongoose.Schema(
 			type: String,
 			default: "",
 		},
+		refreshTokenHash: {
+			type: String,
+			default: "",
+		},
 		passwordResetExpiresAt: Date,
 		isActive: {
 			type: Boolean,
@@ -89,6 +98,10 @@ const userSchema = new mongoose.Schema(
 userSchema.index({ createdAt: -1 });
 
 userSchema.pre("save", async function hashPassword() {
+	if (this.isModified("firstName") || this.isModified("lastName") || !this.fullName) {
+		this.fullName = `${this.firstName || ""} ${this.lastName || ""}`.trim();
+	}
+
 	if (!this.isModified("password")) {
 		return;
 	}

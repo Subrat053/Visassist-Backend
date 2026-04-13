@@ -12,6 +12,7 @@ const {
   listCountriesAdmin,
   listJobsAdmin,
   listUsers,
+  deleteUser,
   updateBlogPost,
   updateConsultationStatus,
   updateCountry,
@@ -23,12 +24,13 @@ const { requireRoles } = require("../middlewares/role.middleware.js");
 
 const router = Router();
 
-router.use(requireAuth, requireRoles("admin"));
+router.use(requireAuth, requireRoles("admin", "super_admin"));
 
 router.get("/stats", getAdminStats);
 
 router.get("/users", listUsers);
 router.patch("/users/:userId", updateUser);
+router.delete("/users/:userId", deleteUser);
 
 router.get("/consultations", listConsultations);
 router.patch("/consultations/:consultationId/status", updateConsultationStatus);

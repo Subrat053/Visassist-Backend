@@ -20,9 +20,13 @@ const appointmentSchema = new mongoose.Schema(
     appointmentDate: { type: Date, required: true, index: true },
     appointmentTime: { type: String, default: "" },
     center: { type: String, required: true, trim: true },
+    timezone: { type: String, default: "UTC" },
+    meetingMode: { type: String, enum: ["online", "offline"], default: "offline" },
     reference: { type: String, default: "" },
     bookingStatus: { type: String, enum: APPOINTMENT_BOOKING_STATUSES, default: "pending", index: true },
+    status: { type: String, enum: APPOINTMENT_BOOKING_STATUSES, default: "pending", index: true },
     remarks: { type: String, default: "" },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     rescheduleHistory: { type: [rescheduleSchema], default: [] },
   },
   { timestamps: true }

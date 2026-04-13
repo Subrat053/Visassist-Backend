@@ -10,6 +10,10 @@ const Applicant = require("../models/Applicant.js");
 const Case = require("../models/Case.js");
 const Appointment = require("../models/Appointment.js");
 const Invoice = require("../models/Invoice.js");
+const ChecklistTemplate = require("../models/ChecklistTemplate.js");
+const CommunicationTemplate = require("../models/CommunicationTemplate.js");
+const CountryProcessUpdate = require("../models/CountryProcessUpdate.js");
+const Setting = require("../models/Setting.js");
 const { CASE_STATUSES, LEAD_STAGES } = require("../utils/visaassist.constants.js");
 const { visaCategoriesSeed, servicePackagesSeed } = require("./visaassist.data.js");
 
@@ -109,6 +113,24 @@ const runVisaAssistSeed = async () => {
       password: "Admin@1234",
       role: "destination_specialist",
       country: "Australia",
+    }),
+    upsertStaffUser({
+      firstName: "Rhea",
+      lastName: "Das",
+      email: "adviser@visaassist.org",
+      phone: "+91-90000-11122",
+      password: "Admin@1234",
+      role: "adviser",
+      country: "India",
+    }),
+    upsertStaffUser({
+      firstName: "Kabir",
+      lastName: "Sethi",
+      email: "support@visaassist.org",
+      phone: "+91-90000-33344",
+      password: "Admin@1234",
+      role: "support",
+      country: "India",
     }),
   ]);
 
@@ -515,6 +537,64 @@ const runVisaAssistSeed = async () => {
       engagementTerms: "Invoice issued after refusal reassessment session.",
       generatedBy: destinationSpecialist._id,
     },
+  ]);
+
+  await ChecklistTemplate.deleteMany({});
+  await ChecklistTemplate.insertMany([
+    {
+      name: "Canada Study Basic Checklist",
+      destinationCountry: "Canada",
+      visaCategory: categories[1]?._id || categories[0]._id,
+      visaTypeSlug: "study",
+      version: 1,
+      isActiveVersion: true,
+      isActive: true,
+      status: "active",
+      items: [
+        { key: "passport", label: "Passport", required: true, documentCategory: "passport", sortOrder: 1 },
+        { key: "funds", label: "Proof of Funds", required: true, documentCategory: "bank_statement", sortOrder: 2 },
+      ],
+      changeLog: [{ summary: "Initial template", changedBy: docsExec._id }],
+    },
+  ]);
+
+  await CommunicationTemplate.deleteMany({});
+  await CommunicationTemplate.insertMany([
+    {
+      key: "email-doc-reminder",
+      name: "Document Reminder",
+      type: "email",
+      channel: "email",
+      subject: "Pending documents for {{fullName}}",
+      body: "Hello {{fullName}}, please upload pending documents.",
+      variables: ["fullName"],
+      isActive: true,
+      createdBy: superAdmin._id,
+    },
+  ]);
+
+  await CountryProcessUpdate.deleteMany({});
+  await CountryProcessUpdate.insertMany([
+    {
+      destinationCountry: "Canada",
+      visaCategory: "Study",
+      title: "Biometrics processing update",
+      summary: "Average processing timeline revised",
+      content: "Biometrics slots are now available in 2 to 3 weeks.",
+      advisory: "Biometrics slots are now available in 2 to 3 weeks.",
+      effectiveDate: new Date(),
+      sourceUrl: "https://www.canada.ca",
+      status: "published",
+      publishedBy: destinationSpecialist._id,
+      version: 1,
+      isActiveVersion: true,
+    },
+  ]);
+
+  await Setting.deleteMany({});
+  await Setting.insertMany([
+    { key: "system.defaultCurrency", value: "INR", group: "system" },
+    { key: "features.enablePayments", value: true, group: "features" },
   ]);
 
   console.log("Visaassist seed complete.");

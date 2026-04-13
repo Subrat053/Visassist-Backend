@@ -1,6 +1,14 @@
 const asyncHandler = require("../utils/asyncHandler.js");
 const { sendSuccess } = require("../utils/ApiResponse.js");
-const { forgotPassword, loginUser, logoutUser, refreshUserToken, resetPassword, signupUser, } = require("../services/auth.service.js");
+const {
+  forgotPassword,
+  getMe,
+  loginUser,
+  logoutUser,
+  refreshUserToken,
+  resetPassword,
+  signupUser,
+} = require("../services/auth.service.js");
 
 const requestContext = (req) => ({
   ipAddress: req.ip,
@@ -17,6 +25,11 @@ const login = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, data);
 });
 
+const customerLogin = asyncHandler(async (req, res) => {
+  const data = await loginUser(req.body, requestContext(req));
+  return sendSuccess(res, 200, data);
+});
+
 const logout = asyncHandler(async (req, res) => {
   const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
   await logoutUser(refreshToken);
@@ -25,6 +38,11 @@ const logout = asyncHandler(async (req, res) => {
 
 const refreshToken = asyncHandler(async (req, res) => {
   const data = await refreshUserToken(req.body.refreshToken, requestContext(req));
+  return sendSuccess(res, 200, data);
+});
+
+const me = asyncHandler(async (req, res) => {
+  const data = await getMe(req.user._id);
   return sendSuccess(res, 200, data);
 });
 
@@ -38,4 +56,13 @@ const resetPasswordController = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, { message: "Password reset successful" });
 });
 
-module.exports = { signup, login, logout, refreshToken, forgotPasswordController, resetPasswordController };
+module.exports = {
+  signup,
+  login,
+  customerLogin,
+  logout,
+  refreshToken,
+  me,
+  forgotPasswordController,
+  resetPasswordController,
+};

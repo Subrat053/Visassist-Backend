@@ -13,9 +13,15 @@ const weeklyLogSchema = new mongoose.Schema(
 const countryProcessUpdateSchema = new mongoose.Schema(
   {
     destinationCountry: { type: String, required: true, trim: true, index: true },
+    visaCategory: { type: String, default: "", trim: true, index: true },
     title: { type: String, required: true, trim: true },
+    summary: { type: String, default: "" },
+    content: { type: String, default: "" },
     advisory: { type: String, required: true },
     effectiveDate: { type: Date, required: true, index: true },
+    sourceUrl: { type: String, default: "" },
+    status: { type: String, enum: ["draft", "published", "archived"], default: "published", index: true },
+    publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     version: { type: Number, required: true, min: 1 },
     isActiveVersion: { type: Boolean, default: true, index: true },
     internalNotes: { type: String, default: "" },

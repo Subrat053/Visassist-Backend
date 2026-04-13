@@ -9,6 +9,7 @@ const countryRoutes = require("./country.routes.js");
 const jobRoutes = require("./job.routes.js");
 const newsletterRoutes = require("./newsletter.routes.js");
 const paymentRoutes = require("./payment.routes.js");
+const publicRoutes = require("./public.routes.js");
 const studyRoutes = require("./study.routes.js");
 const successStoryRoutes = require("./successStory.routes.js");
 const userRoutes = require("./user.routes.js");
@@ -28,6 +29,7 @@ router.use("/contact", contactRoutes);
 router.use("/newsletter", newsletterRoutes);
 router.use("/user", userRoutes);
 router.use("/payments", paymentRoutes);
+router.use("/public", publicRoutes);
 router.use("/success-stories", successStoryRoutes);
 router.use("/visaassist", visaassistRoutes);
 

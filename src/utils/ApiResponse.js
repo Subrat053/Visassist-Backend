@@ -1,7 +1,8 @@
-const sendSuccess = (res, statusCode, data = null) => {
+const sendSuccess = (res, statusCode, data = null, message = undefined) => {
   return res.status(statusCode).json({
     success: true,
     data,
+    ...(message ? { message } : {}),
   });
 };
 

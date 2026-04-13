@@ -301,6 +301,371 @@ const sendTemplatePreview = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, renderedPreview);
 });
 
+const extractRequestMetadata = (req) => ({
+  ipAddress: req.ip,
+  userAgent: req.headers["user-agent"] || "",
+  referrer: req.headers.referer || "",
+  pagePath: req.headers["x-page-path"] || "",
+  utmSource: req.headers["x-utm-source"] || "",
+  utmMedium: req.headers["x-utm-medium"] || "",
+  utmCampaign: req.headers["x-utm-campaign"] || "",
+});
+
+const publicEligibilityCheck = asyncHandler(async (req, res) => {
+  const data = await services.createPublicEligibility(req.body, extractRequestMetadata(req));
+  return sendSuccess(res, 201, data, data.message);
+});
+
+const publicContact = asyncHandler(async (req, res) => {
+  const data = await services.createPublicContact(req.body, extractRequestMetadata(req));
+  return sendSuccess(res, 201, data, data.message);
+});
+
+const publicApplication = asyncHandler(async (req, res) => {
+  const data = await services.createPublicApplication(req.body, extractRequestMetadata(req), req.user?._id || null);
+  return sendSuccess(res, 201, data, data.message);
+});
+
+const publicCountryUpdates = asyncHandler(async (req, res) => {
+  const data = await services.listPublicCountryUpdates(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const updateLead = asyncHandler(async (req, res) => {
+  const data = await services.updateLead(req.params.leadId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Lead updated successfully");
+});
+
+const convertLeadToApplicant = asyncHandler(async (req, res) => {
+  const data = await services.convertLeadToApplicant(req.params.leadId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Lead converted to applicant successfully");
+});
+
+const convertLeadToCase = asyncHandler(async (req, res) => {
+  const data = await services.convertLeadToCase(req.params.leadId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Lead converted to case successfully");
+});
+
+const updateApplicant = asyncHandler(async (req, res) => {
+  const data = await services.updateApplicant(req.params.applicantId, req.body);
+  return sendSuccess(res, 200, data, "Applicant updated successfully");
+});
+
+const uploadApplicantDocument = asyncHandler(async (req, res) => {
+  const data = await services.uploadApplicantDocument(req.params.applicantId, { ...req.body, file: req.file }, req.user._id);
+  return sendSuccess(res, 201, data, "Applicant document uploaded successfully");
+});
+
+const listApplicantCases = asyncHandler(async (req, res) => {
+  const data = await services.listApplicantCases(req.params.applicantId, req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const updateCase = asyncHandler(async (req, res) => {
+  const data = await services.updateCase(req.params.caseId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Case updated successfully");
+});
+
+const addCaseTimeline = asyncHandler(async (req, res) => {
+  const data = await services.addCaseTimeline(req.params.caseId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Case timeline updated successfully");
+});
+
+const linkCaseChecklist = asyncHandler(async (req, res) => {
+  const data = await services.linkCaseChecklist(req.params.caseId, req.body.checklistId);
+  return sendSuccess(res, 200, data, "Checklist linked successfully");
+});
+
+const linkCaseService = asyncHandler(async (req, res) => {
+  const data = await services.linkCaseService(req.params.caseId, req.body.serviceId);
+  return sendSuccess(res, 200, data, "Service linked successfully");
+});
+
+const createStaff = asyncHandler(async (req, res) => {
+  const data = await services.createStaff(req.body, req.user._id);
+  return sendSuccess(res, 201, data, "Staff created successfully");
+});
+
+const updateStaff = asyncHandler(async (req, res) => {
+  const data = await services.updateStaff(req.params.staffId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Staff updated successfully");
+});
+
+const updateStaffStatus = asyncHandler(async (req, res) => {
+  const data = await services.updateStaffStatus(req.params.staffId, req.body.isActive, req.user._id);
+  return sendSuccess(res, 200, data, "Staff status updated successfully");
+});
+
+const getDocumentById = asyncHandler(async (req, res) => {
+  const data = await services.getDocumentById(req.params.documentId);
+  return sendSuccess(res, 200, data);
+});
+
+const reviewDocument = asyncHandler(async (req, res) => {
+  const data = await services.reviewDocument(req.params.documentId, req.body, req.user._id);
+  return sendSuccess(res, 200, data, "Document review updated successfully");
+});
+
+const updateDocument = asyncHandler(async (req, res) => {
+  const data = await services.updateDocument(req.params.documentId, req.body);
+  return sendSuccess(res, 200, data, "Document updated successfully");
+});
+
+const deleteDocument = asyncHandler(async (req, res) => {
+  const data = await services.deleteDocument(req.params.documentId, req.user._id);
+  return sendSuccess(res, 200, data, "Document deleted successfully");
+});
+
+const listAppointments = asyncHandler(async (req, res) => {
+  const data = await services.listAppointments(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getAppointmentById = asyncHandler(async (req, res) => {
+  const data = await services.getAppointmentById(req.params.appointmentId);
+  return sendSuccess(res, 200, data);
+});
+
+const updateAppointment = asyncHandler(async (req, res) => {
+  const data = await services.updateAppointment(req.params.appointmentId, req.body);
+  return sendSuccess(res, 200, data, "Appointment updated successfully");
+});
+
+const updateAppointmentStatus = asyncHandler(async (req, res) => {
+  const data = await services.updateAppointmentStatus(req.params.appointmentId, req.body.status);
+  return sendSuccess(res, 200, data, "Appointment status updated successfully");
+});
+
+const deleteAppointment = asyncHandler(async (req, res) => {
+  const data = await services.deleteAppointment(req.params.appointmentId);
+  return sendSuccess(res, 200, data, "Appointment deleted successfully");
+});
+
+const listPayments = asyncHandler(async (req, res) => {
+  const data = await services.listPayments(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getPaymentById = asyncHandler(async (req, res) => {
+  const data = await services.getPaymentById(req.params.paymentId);
+  return sendSuccess(res, 200, data);
+});
+
+const createPaymentIntent = asyncHandler(async (req, res) => {
+  const data = await services.createPaymentIntent(req.body, req.user._id);
+  return sendSuccess(res, 201, data, "Payment intent created successfully");
+});
+
+const createManualPayment = asyncHandler(async (req, res) => {
+  const data = await services.createManualPayment(req.body, req.user._id);
+  return sendSuccess(res, 201, data, "Manual payment created successfully");
+});
+
+const stripeWebhook = asyncHandler(async (req, res) => {
+  const data = await services.handleStripeWebhook(req.body);
+  return sendSuccess(res, 200, data, "Webhook processed");
+});
+
+const updatePaymentStatus = asyncHandler(async (req, res) => {
+  const data = await services.updatePaymentStatus(req.params.paymentId, req.body.status);
+  return sendSuccess(res, 200, data, "Payment status updated successfully");
+});
+
+const getPaymentInvoice = asyncHandler(async (req, res) => {
+  const data = await services.getPaymentInvoice(req.params.paymentId);
+  return sendSuccess(res, 200, data);
+});
+
+const createService = asyncHandler(async (req, res) => {
+  const data = await services.createService(req.body);
+  return sendSuccess(res, 201, data, "Service created successfully");
+});
+
+const listServices = asyncHandler(async (req, res) => {
+  const data = await services.listServices(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getServiceById = asyncHandler(async (req, res) => {
+  const data = await services.getServiceById(req.params.serviceId);
+  return sendSuccess(res, 200, data);
+});
+
+const updateService = asyncHandler(async (req, res) => {
+  const data = await services.updateService(req.params.serviceId, req.body);
+  return sendSuccess(res, 200, data, "Service updated successfully");
+});
+
+const deleteService = asyncHandler(async (req, res) => {
+  const data = await services.deleteService(req.params.serviceId);
+  return sendSuccess(res, 200, data, "Service deleted successfully");
+});
+
+const createChecklist = asyncHandler(async (req, res) => {
+  const data = await services.createChecklist(req.body, req.user._id);
+  return sendSuccess(res, 201, data, "Checklist created successfully");
+});
+
+const listChecklists = asyncHandler(async (req, res) => {
+  const data = await services.listChecklists(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getChecklistById = asyncHandler(async (req, res) => {
+  const data = await services.getChecklistById(req.params.checklistId);
+  return sendSuccess(res, 200, data);
+});
+
+const updateChecklist = asyncHandler(async (req, res) => {
+  const data = await services.updateChecklist(req.params.checklistId, req.body);
+  return sendSuccess(res, 200, data, "Checklist updated successfully");
+});
+
+const deleteChecklist = asyncHandler(async (req, res) => {
+  const data = await services.deleteChecklist(req.params.checklistId);
+  return sendSuccess(res, 200, data, "Checklist deleted successfully");
+});
+
+const createTemplate = asyncHandler(async (req, res) => {
+  const data = await services.createTemplate(req.body, req.user._id);
+  return sendSuccess(res, 201, data, "Template created successfully");
+});
+
+const listTemplates = asyncHandler(async (req, res) => {
+  const data = await services.listTemplates(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getTemplateById = asyncHandler(async (req, res) => {
+  const data = await services.getTemplateById(req.params.templateId);
+  return sendSuccess(res, 200, data);
+});
+
+const updateTemplateV2 = asyncHandler(async (req, res) => {
+  const data = await services.updateTemplateV2(req.params.templateId, req.body);
+  return sendSuccess(res, 200, data, "Template updated successfully");
+});
+
+const deleteTemplate = asyncHandler(async (req, res) => {
+  const data = await services.deleteTemplate(req.params.templateId);
+  return sendSuccess(res, 200, data, "Template deleted successfully");
+});
+
+const previewTemplate = asyncHandler(async (req, res) => {
+  const data = await services.previewTemplate(req.params.templateId, req.body.variables || {});
+  return sendSuccess(res, 200, data);
+});
+
+const createCountryUpdate = asyncHandler(async (req, res) => {
+  const data = await services.createCountryUpdate(req.body, req.user._id);
+  return sendSuccess(res, 201, data, "Country update created successfully");
+});
+
+const listCountryUpdates = asyncHandler(async (req, res) => {
+  const data = await services.listCountryUpdates(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getCountryUpdateById = asyncHandler(async (req, res) => {
+  const data = await services.getCountryUpdateById(req.params.id);
+  return sendSuccess(res, 200, data);
+});
+
+const updateCountryUpdate = asyncHandler(async (req, res) => {
+  const data = await services.updateCountryUpdate(req.params.id, req.body);
+  return sendSuccess(res, 200, data, "Country update updated successfully");
+});
+
+const deleteCountryUpdate = asyncHandler(async (req, res) => {
+  const data = await services.deleteCountryUpdate(req.params.id);
+  return sendSuccess(res, 200, data, "Country update deleted successfully");
+});
+
+const getRevenueReport = asyncHandler(async (_req, res) => {
+  const data = await services.getRevenueReport();
+  return sendSuccess(res, 200, data);
+});
+
+const getConversionReport = asyncHandler(async (_req, res) => {
+  const data = await services.getConversionReport();
+  return sendSuccess(res, 200, data);
+});
+
+const getStaffPerformanceReport = asyncHandler(async (_req, res) => {
+  const data = await services.getStaffPerformanceReport();
+  return sendSuccess(res, 200, data);
+});
+
+const getApplicationsReport = asyncHandler(async (_req, res) => {
+  const data = await services.getApplicationsReport();
+  return sendSuccess(res, 200, data);
+});
+
+const getExportReport = asyncHandler(async (req, res) => {
+  const data = await services.getExportReport(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getSettings = asyncHandler(async (req, res) => {
+  const data = await services.listSettings(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const patchSettings = asyncHandler(async (req, res) => {
+  const data = await services.patchSettings(req.body);
+  return sendSuccess(res, 200, data, "Settings updated successfully");
+});
+
+const getComplianceLogs = asyncHandler(async (req, res) => {
+  const data = await services.listAuditTrail(req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getComplianceSummary = asyncHandler(async (_req, res) => {
+  const data = await services.getComplianceSummary();
+  return sendSuccess(res, 200, data);
+});
+
+const getUserProfile = asyncHandler(async (req, res) => {
+  const data = await services.getUserProfile(req.user._id);
+  return sendSuccess(res, 200, data);
+});
+
+const updateUserProfile = asyncHandler(async (req, res) => {
+  const data = await services.updateUserProfile(req.user._id, req.body);
+  return sendSuccess(res, 200, data, "Profile updated successfully");
+});
+
+const listUserApplications = asyncHandler(async (req, res) => {
+  const data = await services.listUserApplications(req.user._id, req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const getUserApplication = asyncHandler(async (req, res) => {
+  const data = await services.getUserApplication(req.user._id, req.params.id);
+  return sendSuccess(res, 200, data);
+});
+
+const listUserDocuments = asyncHandler(async (req, res) => {
+  const data = await services.listUserDocuments(req.user._id, req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const uploadUserDocument = asyncHandler(async (req, res) => {
+  const data = await services.uploadUserDocument(req.user._id, { ...req.body, file: req.file });
+  return sendSuccess(res, 201, data, "Document uploaded successfully");
+});
+
+const listUserPayments = asyncHandler(async (req, res) => {
+  const data = await services.listUserPayments(req.user._id, req.query);
+  return sendSuccess(res, 200, data);
+});
+
+const listUserAppointments = asyncHandler(async (req, res) => {
+  const data = await services.listUserAppointments(req.user._id, req.query);
+  return sendSuccess(res, 200, data);
+});
+
 module.exports = {
   staffLogin,
   refreshStaffToken,
@@ -356,4 +721,75 @@ module.exports = {
   recordConsent,
   listAuditTrail,
   sendTemplatePreview,
+  publicEligibilityCheck,
+  publicContact,
+  publicApplication,
+  publicCountryUpdates,
+  updateLead,
+  convertLeadToApplicant,
+  convertLeadToCase,
+  updateApplicant,
+  uploadApplicantDocument,
+  listApplicantCases,
+  updateCase,
+  addCaseTimeline,
+  linkCaseChecklist,
+  linkCaseService,
+  createStaff,
+  updateStaff,
+  updateStaffStatus,
+  getDocumentById,
+  reviewDocument,
+  updateDocument,
+  deleteDocument,
+  listAppointments,
+  getAppointmentById,
+  updateAppointment,
+  updateAppointmentStatus,
+  deleteAppointment,
+  listPayments,
+  getPaymentById,
+  createPaymentIntent,
+  createManualPayment,
+  stripeWebhook,
+  updatePaymentStatus,
+  getPaymentInvoice,
+  createService,
+  listServices,
+  getServiceById,
+  updateService,
+  deleteService,
+  createChecklist,
+  listChecklists,
+  getChecklistById,
+  updateChecklist,
+  deleteChecklist,
+  createTemplate,
+  listTemplates,
+  getTemplateById,
+  updateTemplateV2,
+  deleteTemplate,
+  previewTemplate,
+  createCountryUpdate,
+  listCountryUpdates,
+  getCountryUpdateById,
+  updateCountryUpdate,
+  deleteCountryUpdate,
+  getRevenueReport,
+  getConversionReport,
+  getStaffPerformanceReport,
+  getApplicationsReport,
+  getExportReport,
+  getSettings,
+  patchSettings,
+  getComplianceLogs,
+  getComplianceSummary,
+  getUserProfile,
+  updateUserProfile,
+  listUserApplications,
+  getUserApplication,
+  listUserDocuments,
+  uploadUserDocument,
+  listUserPayments,
+  listUserAppointments,
 };

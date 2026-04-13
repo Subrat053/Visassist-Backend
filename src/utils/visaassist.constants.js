@@ -4,11 +4,19 @@ const ROLES = [
   "documentation_executive",
   "support_executive",
   "destination_specialist",
+  "adviser",
+  "support",
 ];
 
 const LEAD_STAGES = ["new", "contacted", "qualified", "converted", "lost"];
 
 const CASE_STATUSES = [
+  "new",
+  "in_review",
+  "biometrics",
+  "interview",
+  "rejected",
+  "on_hold",
   "inquiry_received",
   "screening_pending",
   "documents_pending",
@@ -25,12 +33,22 @@ const CASE_STATUSES = [
   "closed",
 ];
 
-const PRIORITIES = ["low", "medium", "high", "critical"];
+const PRIORITIES = ["low", "medium", "high", "critical", "urgent"];
 
 const CHECKLIST_ITEM_STATUSES = ["pending", "received", "rejected"];
 
-const APPOINTMENT_TYPES = ["biometrics", "submission", "interview", "embassy"];
+const APPOINTMENT_TYPES = [
+  "consultation",
+  "biometrics",
+  "interview",
+  "embassy",
+  "document_review",
+  "follow_up",
+  "submission",
+];
 const APPOINTMENT_BOOKING_STATUSES = [
+  "scheduled",
+  "missed",
   "pending",
   "confirmed",
   "rescheduled",
@@ -38,9 +56,28 @@ const APPOINTMENT_BOOKING_STATUSES = [
   "cancelled",
 ];
 
-const PAYMENT_STATUSES = ["pending", "partial", "paid", "refunded"];
+const PAYMENT_STATUSES = ["pending", "partial", "paid", "failed", "refunded", "partially_refunded"];
 
 const TEMPLATE_CHANNELS = ["email", "whatsapp", "reminder"];
+
+const DOCUMENT_CATEGORIES = [
+  "passport",
+  "bank_statement",
+  "sop",
+  "loa",
+  "visa_form",
+  "photo",
+  "id_proof",
+  "employment",
+  "education",
+  "medical",
+  "insurance",
+  "other",
+];
+
+const DOCUMENT_VERIFICATION_STATUSES = ["pending", "approved", "rejected", "needs_resubmission"];
+
+const COUNTRY_UPDATE_STATUSES = ["draft", "published", "archived"];
 
 const AUDIT_ACTIONS = [
   "status_change",
@@ -61,5 +98,8 @@ module.exports = {
   APPOINTMENT_BOOKING_STATUSES,
   PAYMENT_STATUSES,
   TEMPLATE_CHANNELS,
+  DOCUMENT_CATEGORIES,
+  DOCUMENT_VERIFICATION_STATUSES,
+  COUNTRY_UPDATE_STATUSES,
   AUDIT_ACTIONS,
 };

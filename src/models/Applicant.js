@@ -12,12 +12,16 @@ const dependentSchema = new mongoose.Schema(
 
 const applicantSchema = new mongoose.Schema(
   {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     leadId: { type: mongoose.Schema.Types.ObjectId, ref: "Lead", index: true },
     fullName: { type: String, required: true, trim: true, index: true },
     email: { type: String, required: true, trim: true, lowercase: true, index: true },
     phone: { type: String, required: true, trim: true, index: true },
     countryCode: { type: String, trim: true, default: "+91" },
     nationality: { type: String, required: true, trim: true },
+    dateOfBirth: { type: Date },
+    gender: { type: String, default: "" },
+    maritalStatus: { type: String, default: "" },
     passport: {
       passportNumber: { type: String, default: "" },
       issueCountry: { type: String, default: "" },
@@ -29,9 +33,20 @@ const applicantSchema = new mongoose.Schema(
       maritalStatus: { type: String, default: "" },
       currentAddress: { type: String, default: "" },
       occupation: { type: String, default: "" },
+      education: { type: String, default: "" },
+      annualIncome: { type: Number, default: 0 },
+    },
+    address: {
+      country: { type: String, default: "" },
+      state: { type: String, default: "" },
+      city: { type: String, default: "" },
+      postalCode: { type: String, default: "" },
+      line1: { type: String, default: "" },
+      line2: { type: String, default: "" },
     },
     travelProfile: {
       previousTravelCountries: { type: [String], default: [] },
+      previousVisaHistory: { type: [String], default: [] },
       priorRefusal: { type: Boolean, default: false },
       refusalDetails: { type: String, default: "" },
     },
@@ -46,6 +61,12 @@ const applicantSchema = new mongoose.Schema(
     disclaimerAcceptedAt: { type: Date },
     refundPolicyAccepted: { type: Boolean, default: false, index: true },
     refundPolicyAcceptedAt: { type: Date },
+    profileStatus: {
+      type: String,
+      enum: ["draft", "submitted", "under_review", "approved", "rejected"],
+      default: "submitted",
+      index: true,
+    },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }

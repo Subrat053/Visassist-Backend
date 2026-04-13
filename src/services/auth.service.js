@@ -5,11 +5,14 @@ const ApiError = require("../utils/ApiError.js");
 const { issueAuthTokens, revokeRefreshToken, rotateRefreshToken } = require("./token.service.js");
 
 const buildSafeUser = (user) => ({
+  _id: user._id,
   id: user._id,
   firstName: user.firstName,
   lastName: user.lastName,
+  fullName: user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim(),
   email: user.email,
-  role: user.role,
+  role: user.role === "user" ? "customer" : user.role,
+  isActive: Boolean(user.isActive),
 });
 
 const signupUser = async (payload, context) => {
@@ -24,7 +27,7 @@ const signupUser = async (payload, context) => {
     email: payload.email.toLowerCase(),
     phone: payload.phone || "",
     password: payload.password,
-    role: "user",
+    role: "customer",
   });
 
   const tokens = await issueAuthTokens(user, context);
@@ -56,6 +59,15 @@ const loginUser = async (payload, context) => {
     user: buildSafeUser(user),
     ...tokens,
   };
+};
+
+const getMe = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  return buildSafeUser(user);
 };
 
 const logoutUser = async (refreshToken) => {
@@ -117,4 +129,4 @@ const resetPassword = async ({ token, newPassword }) => {
   await user.save();
 };
 
-module.exports = { signupUser, loginUser, logoutUser, refreshUserToken, forgotPassword, resetPassword };
+module.exports = { signupUser, loginUser, logoutUser, refreshUserToken, forgotPassword, resetPassword, getMe };

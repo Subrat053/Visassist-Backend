@@ -14,6 +14,8 @@ const CommunicationTemplate = require("../../models/CommunicationTemplate.js");
 const CountryProcessUpdate = require("../../models/CountryProcessUpdate.js");
 const ConsentRecord = require("../../models/ConsentRecord.js");
 const AuditTrail = require("../../models/AuditTrail.js");
+const Setting = require("../../models/Setting.js");
+const stripe = require("../../config/stripe.js");
 const cloudinary = require("../../config/cloudinary.js");
 
 const ApiError = require("../../utils/ApiError.js");
@@ -34,12 +36,15 @@ const {
 } = require("../../utils/visaassist.constants.js");
 
 const buildSafeUser = (user) => ({
+  _id: user._id,
   id: user._id,
   firstName: user.firstName,
   lastName: user.lastName,
+  fullName: user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim(),
   email: user.email,
   role: user.role,
   phone: user.phone,
+  isActive: Boolean(user.isActive),
 });
 
 const slugify = (value) =>
@@ -1390,6 +1395,1092 @@ const listAuditTrail = async (query) => {
   });
 };
 
+const getRequestMetadata = (context = {}) => ({
+  utmSource: context.utmSource || "",
+  utmMedium: context.utmMedium || "",
+  utmCampaign: context.utmCampaign || "",
+  pagePath: context.pagePath || "",
+  ipAddress: context.ipAddress || "",
+  userAgent: context.userAgent || "",
+  referrer: context.referrer || "",
+});
+
+const createPublicEligibility = async (payload, context = {}) => {
+  const lead = await createLead(
+    {
+      fullName: `${payload.firstName} ${payload.lastName}`.trim(),
+      email: payload.email,
+      phone: payload.phone,
+      nationality: payload.nationality || "Unknown",
+      destinationCountry: payload.countryOfInterest,
+      visaCategory: payload.visaCategory,
+      visaTypeSlug: slugify(payload.visaCategory),
+      travelPurpose: payload.visaCategory,
+      priorRefusal: Boolean(payload.priorRefusal),
+      notes: payload.message || "",
+      source: "free_eligibility",
+      metadata: getRequestMetadata(context),
+    },
+    null
+  );
+
+  return {
+    leadId: lead._id,
+    message: "Eligibility request submitted successfully",
+  };
+};
+
+const createPublicContact = async (payload, context = {}) => {
+  const lead = await createLead(
+    {
+      fullName: `${payload.firstName} ${payload.lastName}`.trim(),
+      email: payload.email,
+      phone: payload.phone,
+      nationality: payload.nationality || "Unknown",
+      destinationCountry: payload.countryOfInterest,
+      visaCategory: payload.visaCategory || "General",
+      visaTypeSlug: slugify(payload.visaCategory || "general"),
+      travelPurpose: payload.visaCategory || "General Inquiry",
+      notes: payload.message || "",
+      source: "contact_form",
+      metadata: getRequestMetadata(context),
+    },
+    null
+  );
+
+  return {
+    leadId: lead._id,
+    message: "Contact request submitted successfully",
+  };
+};
+
+const ensureCustomerUser = async (payload, actorId = null) => {
+  let user = null;
+
+  if (actorId) {
+    user = await User.findById(actorId);
+  }
+
+  if (!user) {
+    user = await User.findOne({ email: payload.email.toLowerCase() });
+  }
+
+  if (!user) {
+    user = await User.create({
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      email: payload.email.toLowerCase(),
+      phone: payload.phone || "",
+      password: `Temp@${Date.now()}aA1`,
+      role: "customer",
+      isEmailVerified: false,
+    });
+  }
+
+  return user;
+};
+
+const createPublicApplication = async (payload, context = {}, actorId = null) => {
+  const customer = await ensureCustomerUser(payload, actorId);
+
+  const lead = await createLead(
+    {
+      fullName: `${payload.firstName} ${payload.lastName}`.trim(),
+      email: payload.email,
+      phone: payload.phone,
+      nationality: payload.nationality || "Unknown",
+      destinationCountry: payload.country,
+      visaCategory: payload.visaType,
+      visaTypeSlug: slugify(payload.visaType),
+      travelPurpose: payload.visaType,
+      priorRefusal: Boolean(payload.travelProfile?.priorRefusal),
+      notes: payload.travelProfile?.refusalDetails || "",
+      source: "website",
+      userId: customer._id,
+      metadata: getRequestMetadata(context),
+    },
+    null
+  );
+
+  const applicant = await Applicant.create({
+    userId: customer._id,
+    leadId: lead._id,
+    fullName: `${payload.firstName} ${payload.lastName}`.trim(),
+    email: payload.email,
+    phone: payload.phone,
+    nationality: payload.nationality || "Unknown",
+    passport: payload.passport || {},
+    basicProfile: {
+      occupation: payload.occupation || "",
+    },
+    travelProfile: {
+      priorRefusal: Boolean(payload.travelProfile?.priorRefusal),
+      refusalDetails: payload.travelProfile?.refusalDetails || "",
+      previousTravelCountries: payload.travelProfile?.previousTravelCountries || [],
+      previousVisaHistory: payload.travelProfile?.previousVisaHistory || [],
+    },
+    consentAccepted: Boolean(payload.consentAccepted),
+    disclaimerAccepted: Boolean(payload.disclaimerAccepted),
+    refundPolicyAccepted: Boolean(payload.refundPolicyAccepted),
+    profileStatus: "submitted",
+    createdBy: customer._id,
+  });
+
+  const caseId = await buildUniqueCaseId();
+  const createdCase = await Case.create({
+    caseId,
+    applicantId: applicant._id,
+    leadId: lead._id,
+    destinationCountry: payload.country,
+    visaCategory: payload.visaType,
+    visaTypeSlug: slugify(payload.visaType),
+    caseStatus: "new",
+    priority: "medium",
+    timeline: [
+      {
+        status: "new",
+        note: "Case auto-created from public application",
+        changedBy: customer._id,
+      },
+    ],
+  });
+
+  await Lead.findByIdAndUpdate(lead._id, {
+    $set: {
+      stage: "converted",
+      convertedApplicantId: applicant._id,
+      convertedCaseId: createdCase._id,
+    },
+  });
+
+  return {
+    leadId: lead._id,
+    applicantId: applicant._id,
+    caseId: createdCase._id,
+    caseNumber: createdCase.caseId,
+    message: "Application submitted successfully",
+  };
+};
+
+const updateLead = async (leadId, payload) => {
+  const lead = await Lead.findByIdAndUpdate(leadId, { $set: payload }, { new: true }).populate("assignedTo");
+  if (!lead) {
+    throw new ApiError(404, "LEAD_NOT_FOUND", "Lead not found");
+  }
+  return lead;
+};
+
+const convertLeadToApplicant = async (leadId, payload, actorId) => {
+  const lead = await Lead.findById(leadId);
+  if (!lead) {
+    throw new ApiError(404, "LEAD_NOT_FOUND", "Lead not found");
+  }
+
+  if (lead.convertedApplicantId) {
+    const existingApplicant = await Applicant.findById(lead.convertedApplicantId);
+    if (existingApplicant) {
+      return existingApplicant;
+    }
+  }
+
+  const applicant = await createApplicant(
+    {
+      leadId: lead._id,
+      markLeadConverted: payload?.markLeadConverted !== false,
+      fullName: lead.fullName,
+      email: lead.email,
+      phone: lead.phone,
+      nationality: lead.nationality,
+      travelProfile: {
+        priorRefusal: Boolean(lead.priorRefusal),
+      },
+    },
+    actorId
+  );
+
+  return applicant;
+};
+
+const convertLeadToCase = async (leadId, payload, actorId) => {
+  const lead = await Lead.findById(leadId);
+  if (!lead) {
+    throw new ApiError(404, "LEAD_NOT_FOUND", "Lead not found");
+  }
+
+  let applicantId = payload.applicantId;
+  if (!applicantId) {
+    const applicant = await convertLeadToApplicant(leadId, { markLeadConverted: true }, actorId);
+    applicantId = applicant._id;
+  }
+
+  const createdCase = await createCase(
+    {
+      applicantId,
+      leadId,
+      destinationCountry: payload.destinationCountry || lead.destinationCountry,
+      visaCategory: payload.visaCategory || lead.visaCategory,
+      visaTypeSlug: payload.visaTypeSlug || lead.visaTypeSlug,
+      priority: payload.priority || "medium",
+      assignedStaff: payload.assignedStaff || (lead.assignedTo ? [lead.assignedTo] : []),
+      caseStatus: "new",
+    },
+    actorId
+  );
+
+  return createdCase;
+};
+
+const updateApplicant = async (applicantId, payload) => {
+  const applicant = await Applicant.findByIdAndUpdate(applicantId, { $set: payload }, { new: true });
+  if (!applicant) {
+    throw new ApiError(404, "APPLICANT_NOT_FOUND", "Applicant not found");
+  }
+  return applicant;
+};
+
+const uploadApplicantDocument = async (applicantId, payload, actorId) => {
+  const existingCase = payload.caseId
+    ? await Case.findById(payload.caseId)
+    : await Case.findOne({ applicantId }).sort({ createdAt: -1 });
+
+  if (!existingCase) {
+    throw new ApiError(404, "CASE_NOT_FOUND", "Case not found for applicant");
+  }
+
+  return uploadCaseDocument(
+    {
+      ...payload,
+      caseId: existingCase._id,
+      applicantId,
+    },
+    actorId
+  );
+};
+
+const listApplicantCases = async (applicantId, query) => {
+  return listWithPagination({
+    model: Case,
+    filter: { applicantId },
+    query,
+    sort: parseSort(query.sortBy, query.sortOrder),
+    populate: ["leadId", "assignedStaff"],
+  });
+};
+
+const updateCase = async (caseId, payload, actorId) => {
+  const existingCase = await Case.findByIdAndUpdate(caseId, { $set: payload }, { new: true });
+  if (!existingCase) {
+    throw new ApiError(404, "CASE_NOT_FOUND", "Case not found");
+  }
+
+  if (payload.caseStatus) {
+    existingCase.timeline.push({
+      status: payload.caseStatus,
+      note: "Case updated",
+      changedBy: actorId,
+    });
+    await existingCase.save();
+  }
+
+  return existingCase;
+};
+
+const addCaseTimeline = async (caseId, payload, actorId) => {
+  const existingCase = await Case.findById(caseId);
+  if (!existingCase) {
+    throw new ApiError(404, "CASE_NOT_FOUND", "Case not found");
+  }
+
+  existingCase.timeline.push({
+    status: payload.status,
+    note: payload.note,
+    changedBy: actorId,
+  });
+
+  existingCase.caseStatus = payload.status;
+  await existingCase.save();
+  return existingCase;
+};
+
+const linkCaseChecklist = async (caseId, checklistId) => {
+  const existingCase = await Case.findByIdAndUpdate(caseId, { $set: { checklistId } }, { new: true });
+  if (!existingCase) {
+    throw new ApiError(404, "CASE_NOT_FOUND", "Case not found");
+  }
+  return existingCase;
+};
+
+const linkCaseService = async (caseId, serviceId) => {
+  const existingCase = await Case.findByIdAndUpdate(
+    caseId,
+    { $set: { serviceId, packageId: serviceId } },
+    { new: true }
+  );
+  if (!existingCase) {
+    throw new ApiError(404, "CASE_NOT_FOUND", "Case not found");
+  }
+  return existingCase;
+};
+
+const createStaff = async (payload, actorId) => {
+  const exists = await User.findOne({ email: payload.email.toLowerCase() });
+  if (exists) {
+    throw new ApiError(409, "STAFF_EXISTS", "Staff email is already registered");
+  }
+
+  const staff = await User.create({
+    ...payload,
+    email: payload.email.toLowerCase(),
+  });
+
+  await logAuditEvent({
+    actionType: "generic",
+    entityType: "User",
+    entityId: staff._id,
+    actorId,
+    message: "Staff user created",
+    metadata: { role: staff.role },
+  });
+
+  return buildSafeUser(staff);
+};
+
+const updateStaff = async (staffId, payload, actorId) => {
+  const staff = await User.findByIdAndUpdate(staffId, { $set: payload }, { new: true });
+  if (!staff) {
+    throw new ApiError(404, "STAFF_NOT_FOUND", "Staff not found");
+  }
+
+  await logAuditEvent({
+    actionType: "generic",
+    entityType: "User",
+    entityId: staff._id,
+    actorId,
+    message: "Staff user updated",
+  });
+
+  return buildSafeUser(staff);
+};
+
+const updateStaffStatus = async (staffId, isActive, actorId) => {
+  return updateStaff(staffId, { isActive }, actorId);
+};
+
+const getDocumentById = async (documentId) => {
+  const document = await CaseDocument.findById(documentId).populate("uploadedBy applicantId caseId reviewedBy");
+  if (!document) {
+    throw new ApiError(404, "DOCUMENT_NOT_FOUND", "Document not found");
+  }
+  return document;
+};
+
+const reviewDocument = async (documentId, payload, actorId) => {
+  const document = await CaseDocument.findByIdAndUpdate(
+    documentId,
+    {
+      $set: {
+        verificationStatus: payload.verificationStatus,
+        verificationNote: payload.verificationNote || "",
+        reviewedBy: actorId,
+        reviewedAt: new Date(),
+      },
+    },
+    { new: true }
+  );
+
+  if (!document) {
+    throw new ApiError(404, "DOCUMENT_NOT_FOUND", "Document not found");
+  }
+
+  return document;
+};
+
+const updateDocument = async (documentId, payload) => {
+  const document = await CaseDocument.findByIdAndUpdate(documentId, { $set: payload }, { new: true });
+  if (!document) {
+    throw new ApiError(404, "DOCUMENT_NOT_FOUND", "Document not found");
+  }
+  return document;
+};
+
+const deleteDocument = async (documentId, actorId) => {
+  return archiveCaseDocument(documentId, actorId);
+};
+
+const listAppointments = async (query) => {
+  const filters = pickFilters(query, ["caseId", "applicantId", "appointmentType", "bookingStatus", "status"]);
+  return listWithPagination({
+    model: Appointment,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "appointmentDate", query.sortOrder || "desc"),
+    populate: ["caseId", "applicantId", "createdBy"],
+  });
+};
+
+const getAppointmentById = async (appointmentId) => {
+  const appointment = await Appointment.findById(appointmentId).populate("caseId applicantId createdBy");
+  if (!appointment) {
+    throw new ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
+  }
+  return appointment;
+};
+
+const updateAppointment = async (appointmentId, payload) => {
+  const appointment = await Appointment.findByIdAndUpdate(appointmentId, { $set: payload }, { new: true });
+  if (!appointment) {
+    throw new ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
+  }
+  return appointment;
+};
+
+const updateAppointmentStatus = async (appointmentId, status) => {
+  return updateAppointment(appointmentId, { bookingStatus: status, status });
+};
+
+const deleteAppointment = async (appointmentId) => {
+  const appointment = await Appointment.findByIdAndDelete(appointmentId);
+  if (!appointment) {
+    throw new ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found");
+  }
+  return appointment;
+};
+
+const listPayments = async (query) => {
+  const filters = pickFilters(query, ["invoiceId", "caseId", "applicantId", "leadId", "status", "provider"]);
+  return listWithPagination({
+    model: PaymentTransaction,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "createdAt", query.sortOrder || "desc"),
+    populate: ["invoiceId", "caseId", "applicantId", "recordedBy"],
+  });
+};
+
+const getPaymentById = async (paymentId) => {
+  const payment = await PaymentTransaction.findById(paymentId).populate("invoiceId caseId applicantId recordedBy");
+  if (!payment) {
+    throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+  }
+  return payment;
+};
+
+const ensureInvoiceForPayment = async (payload, actorId) => {
+  if (payload.invoiceId) {
+    const existingInvoice = await Invoice.findById(payload.invoiceId);
+    if (existingInvoice) {
+      return existingInvoice;
+    }
+  }
+
+  if (!payload.caseId || !payload.applicantId) {
+    return null;
+  }
+
+  const invoiceNumber = await buildUniqueInvoiceNumber();
+  const amount = Number(payload.amount || 0);
+
+  return Invoice.create({
+    invoiceNumber,
+    caseId: payload.caseId,
+    applicantId: payload.applicantId,
+    leadId: payload.leadId,
+    lineItems: [
+      {
+        description: payload.paymentType || "Service payment",
+        quantity: 1,
+        unitPrice: amount,
+        taxPercent: 0,
+        amount,
+      },
+    ],
+    currency: String(payload.currency || "USD").toUpperCase(),
+    subTotal: amount,
+    taxTotal: 0,
+    totalAmount: amount,
+    paidAmount: 0,
+    balanceDue: amount,
+    paymentStatus: "pending",
+    generatedBy: actorId,
+  });
+};
+
+const createPaymentIntent = async (payload, actorId) => {
+  const invoice = await ensureInvoiceForPayment(payload, actorId);
+  const amount = Number(payload.amount || 0);
+  const currency = String(payload.currency || "USD").toLowerCase();
+
+  let intent = null;
+  if (process.env.STRIPE_SECRET_KEY) {
+    intent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency,
+      metadata: {
+        caseId: String(payload.caseId || ""),
+        applicantId: String(payload.applicantId || ""),
+        leadId: String(payload.leadId || ""),
+      },
+    });
+  }
+
+  const payment = await PaymentTransaction.create({
+    invoiceId: invoice?._id,
+    invoiceNumber: invoice?.invoiceNumber || "",
+    caseId: payload.caseId,
+    applicantId: payload.applicantId,
+    leadId: payload.leadId,
+    amount,
+    currency: String(payload.currency || "USD").toUpperCase(),
+    paymentType: payload.paymentType || "service_fee",
+    provider: "stripe",
+    providerPaymentId: intent?.id || `mock_intent_${Date.now()}`,
+    transactionReference: intent?.id || "",
+    status: "pending",
+    recordedBy: actorId,
+    createdBy: actorId,
+    metadata: payload.metadata || {},
+  });
+
+  return {
+    payment,
+    clientSecret: intent?.client_secret || `mock_client_secret_${payment._id}`,
+  };
+};
+
+const createManualPayment = async (payload, actorId) => {
+  const invoice = await ensureInvoiceForPayment(payload, actorId);
+  const payment = await PaymentTransaction.create({
+    invoiceId: invoice?._id,
+    invoiceNumber: invoice?.invoiceNumber || "",
+    caseId: payload.caseId,
+    applicantId: payload.applicantId,
+    leadId: payload.leadId,
+    amount: Number(payload.amount || 0),
+    currency: String(payload.currency || "USD").toUpperCase(),
+    paymentType: payload.paymentType || "service_fee",
+    provider: payload.method || "manual",
+    method: payload.method || "manual",
+    transactionReference: payload.transactionReference || "",
+    status: payload.status || "paid",
+    recordedBy: actorId,
+    createdBy: actorId,
+    notes: payload.notes || "",
+  });
+
+  if (invoice && payment.status === "paid") {
+    invoice.paidAmount = Number((invoice.paidAmount + payment.amount).toFixed(2));
+    invoice.balanceDue = Number(Math.max(0, invoice.totalAmount - invoice.paidAmount).toFixed(2));
+    invoice.paymentStatus = invoice.balanceDue === 0 ? "paid" : "partial";
+    await invoice.save();
+  }
+
+  return payment;
+};
+
+const handleStripeWebhook = async (eventPayload) => {
+  const intentId = eventPayload?.data?.object?.id || eventPayload?.data?.object?.payment_intent;
+  if (!intentId) {
+    return { updated: false };
+  }
+
+  const status = eventPayload?.type === "payment_intent.succeeded" ? "paid" : "failed";
+  const payment = await PaymentTransaction.findOneAndUpdate(
+    { providerPaymentId: intentId },
+    { $set: { status, paidAt: new Date(), gatewayResponse: eventPayload } },
+    { new: true }
+  );
+
+  return { updated: Boolean(payment), payment };
+};
+
+const updatePaymentStatus = async (paymentId, status) => {
+  const payment = await PaymentTransaction.findByIdAndUpdate(paymentId, { $set: { status } }, { new: true });
+  if (!payment) {
+    throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+  }
+  return payment;
+};
+
+const getPaymentInvoice = async (paymentId) => {
+  const payment = await PaymentTransaction.findById(paymentId);
+  if (!payment) {
+    throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+  }
+  if (!payment.invoiceId) {
+    throw new ApiError(404, "INVOICE_NOT_FOUND", "Invoice not linked with payment");
+  }
+  return getInvoiceDownloadData(payment.invoiceId);
+};
+
+const createService = async (payload) => {
+  return ServicePackage.create({
+    ...payload,
+    slug: payload.slug || slugify(payload.name),
+    basePrice: payload.basePrice ?? payload.price ?? 0,
+    price: payload.price ?? payload.basePrice ?? 0,
+  });
+};
+
+const listServices = async (query) => {
+  const filters = pickFilters(query, ["destinationCountry", "visaCategory", "visaTypeSlug", "isActive"]);
+  return listWithPagination({
+    model: ServicePackage,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "displayOrder", query.sortOrder || "asc"),
+  });
+};
+
+const getServiceById = async (serviceId) => {
+  const service = await ServicePackage.findById(serviceId);
+  if (!service) {
+    throw new ApiError(404, "SERVICE_NOT_FOUND", "Service not found");
+  }
+  return service;
+};
+
+const updateService = async (serviceId, payload) => {
+  const service = await ServicePackage.findByIdAndUpdate(serviceId, { $set: payload }, { new: true });
+  if (!service) {
+    throw new ApiError(404, "SERVICE_NOT_FOUND", "Service not found");
+  }
+  return service;
+};
+
+const deleteService = async (serviceId) => {
+  const service = await ServicePackage.findByIdAndDelete(serviceId);
+  if (!service) {
+    throw new ApiError(404, "SERVICE_NOT_FOUND", "Service not found");
+  }
+  return service;
+};
+
+const createChecklist = async (payload, actorId) => {
+  const latest = await ChecklistTemplate.findOne({ destinationCountry: payload.destinationCountry }).sort({ version: -1 });
+  const version = (latest?.version || 0) + 1;
+  return ChecklistTemplate.create({
+    ...payload,
+    version,
+    status: payload.isActive === false ? "inactive" : "active",
+    changeLog: [{ summary: "Created", changedBy: actorId }],
+  });
+};
+
+const listChecklists = async (query) => {
+  const filters = pickFilters(query, ["destinationCountry", "visaCategory", "visaTypeSlug", "isActive"]);
+  return listWithPagination({
+    model: ChecklistTemplate,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "createdAt", query.sortOrder || "desc"),
+  });
+};
+
+const getChecklistById = async (checklistId) => {
+  const checklist = await ChecklistTemplate.findById(checklistId);
+  if (!checklist) {
+    throw new ApiError(404, "CHECKLIST_NOT_FOUND", "Checklist not found");
+  }
+  return checklist;
+};
+
+const updateChecklist = async (checklistId, payload) => {
+  const checklist = await ChecklistTemplate.findByIdAndUpdate(checklistId, { $set: payload }, { new: true });
+  if (!checklist) {
+    throw new ApiError(404, "CHECKLIST_NOT_FOUND", "Checklist not found");
+  }
+  return checklist;
+};
+
+const deleteChecklist = async (checklistId) => {
+  const checklist = await ChecklistTemplate.findByIdAndDelete(checklistId);
+  if (!checklist) {
+    throw new ApiError(404, "CHECKLIST_NOT_FOUND", "Checklist not found");
+  }
+  return checklist;
+};
+
+const createTemplate = async (payload, actorId) => {
+  const channelMap = {
+    email: "email",
+    whatsapp: "whatsapp",
+    sms: "reminder",
+    internal_note: "reminder",
+    checklist_message: "reminder",
+  };
+
+  return CommunicationTemplate.create({
+    key: slugify(`${payload.type}-${payload.name}-${Date.now()}`),
+    name: payload.name,
+    type: payload.type,
+    channel: channelMap[payload.type] || "email",
+    subject: payload.subject || "",
+    body: payload.body,
+    variables: payload.variables || [],
+    isActive: payload.isActive !== false,
+    createdBy: actorId,
+  });
+};
+
+const listTemplates = async (query) => {
+  const filters = pickFilters(query, ["type", "channel", "isActive"]);
+  return listWithPagination({
+    model: CommunicationTemplate,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "createdAt", query.sortOrder || "desc"),
+  });
+};
+
+const getTemplateById = async (templateId) => {
+  const template = await CommunicationTemplate.findById(templateId);
+  if (!template) {
+    throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Template not found");
+  }
+  return template;
+};
+
+const updateTemplateV2 = async (templateId, payload) => {
+  const channelMap = {
+    email: "email",
+    whatsapp: "whatsapp",
+    sms: "reminder",
+    internal_note: "reminder",
+    checklist_message: "reminder",
+  };
+
+  const updates = { ...payload };
+  if (payload.type && !payload.channel) {
+    updates.channel = channelMap[payload.type] || "email";
+  }
+
+  const template = await CommunicationTemplate.findByIdAndUpdate(templateId, { $set: updates }, { new: true });
+  if (!template) {
+    throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Template not found");
+  }
+  return template;
+};
+
+const deleteTemplate = async (templateId) => {
+  const template = await CommunicationTemplate.findByIdAndDelete(templateId);
+  if (!template) {
+    throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Template not found");
+  }
+  return template;
+};
+
+const previewTemplate = async (templateId, variables = {}) => {
+  const template = await getTemplateById(templateId);
+  const renderedBody = Object.entries(variables).reduce((acc, [key, value]) => {
+    const token = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    return acc.replace(token, value);
+  }, template.body || "");
+
+  return {
+    templateId,
+    subject: template.subject || "",
+    body: renderedBody,
+  };
+};
+
+const createCountryUpdate = async (payload, actorId) => {
+  const latest = await CountryProcessUpdate.findOne({ destinationCountry: payload.destinationCountry }).sort({ version: -1 });
+  const version = (latest?.version || 0) + 1;
+  return CountryProcessUpdate.create({
+    destinationCountry: payload.destinationCountry,
+    visaCategory: payload.visaCategory || "",
+    title: payload.title,
+    summary: payload.summary || "",
+    content: payload.content,
+    advisory: payload.content,
+    effectiveDate: payload.effectiveDate || new Date(),
+    sourceUrl: payload.sourceUrl || "",
+    status: payload.status || "published",
+    publishedBy: actorId,
+    version,
+    isActiveVersion: payload.status !== "archived",
+  });
+};
+
+const listCountryUpdates = async (query) => {
+  const filters = pickFilters(query, ["destinationCountry", "visaCategory", "status"]);
+  return listWithPagination({
+    model: CountryProcessUpdate,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "effectiveDate", query.sortOrder || "desc"),
+  });
+};
+
+const getCountryUpdateById = async (id) => {
+  const update = await CountryProcessUpdate.findById(id);
+  if (!update) {
+    throw new ApiError(404, "COUNTRY_UPDATE_NOT_FOUND", "Country update not found");
+  }
+  return update;
+};
+
+const updateCountryUpdate = async (id, payload) => {
+  const update = await CountryProcessUpdate.findByIdAndUpdate(id, { $set: payload }, { new: true });
+  if (!update) {
+    throw new ApiError(404, "COUNTRY_UPDATE_NOT_FOUND", "Country update not found");
+  }
+  return update;
+};
+
+const deleteCountryUpdate = async (id) => {
+  const update = await CountryProcessUpdate.findByIdAndDelete(id);
+  if (!update) {
+    throw new ApiError(404, "COUNTRY_UPDATE_NOT_FOUND", "Country update not found");
+  }
+  return update;
+};
+
+const listPublicCountryUpdates = async (query) => {
+  return listWithPagination({
+    model: CountryProcessUpdate,
+    filter: { status: "published" },
+    query,
+    sort: parseSort(query.sortBy || "effectiveDate", query.sortOrder || "desc"),
+  });
+};
+
+const getRevenueReport = async () => {
+  const monthly = await Invoice.aggregate([
+    {
+      $group: {
+        _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
+        totalPaid: { $sum: "$paidAmount" },
+        totalBilled: { $sum: "$totalAmount" },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+
+  return {
+    items: monthly,
+    summary: {
+      totalPaid: monthly.reduce((sum, item) => sum + item.totalPaid, 0),
+      totalBilled: monthly.reduce((sum, item) => sum + item.totalBilled, 0),
+    },
+  };
+};
+
+const getConversionReport = async () => {
+  const [totalLeads, convertedLeads, applicantCount, caseCount] = await Promise.all([
+    Lead.countDocuments({ isArchived: false }),
+    Lead.countDocuments({ stage: "converted", isArchived: false }),
+    Applicant.countDocuments({}),
+    Case.countDocuments({ isArchived: false }),
+  ]);
+
+  const conversionRate = totalLeads ? Number(((convertedLeads / totalLeads) * 100).toFixed(2)) : 0;
+
+  return {
+    totalLeads,
+    convertedLeads,
+    applicantCount,
+    caseCount,
+    conversionRate,
+  };
+};
+
+const getStaffPerformanceReport = async () => {
+  const items = await Case.aggregate([
+    { $unwind: "$assignedStaff" },
+    {
+      $group: {
+        _id: "$assignedStaff",
+        activeCases: {
+          $sum: {
+            $cond: [{ $in: ["$caseStatus", ["closed", "approved", "rejected", "refused"]] }, 0, 1],
+          },
+        },
+        closedCases: {
+          $sum: {
+            $cond: [{ $in: ["$caseStatus", ["closed", "approved"]] }, 1, 0],
+          },
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "_id",
+        foreignField: "_id",
+        as: "staff",
+      },
+    },
+  ]);
+
+  return { items };
+};
+
+const getApplicationsReport = async () => {
+  const items = await Case.aggregate([
+    { $group: { _id: "$caseStatus", count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+  ]);
+
+  return { items };
+};
+
+const getExportReport = async (query) => {
+  const type = query.type || "revenue";
+  let rows = [];
+
+  if (type === "conversion") {
+    const report = await getConversionReport();
+    rows = [
+      ["metric", "value"],
+      ["totalLeads", report.totalLeads],
+      ["convertedLeads", report.convertedLeads],
+      ["applicantCount", report.applicantCount],
+      ["caseCount", report.caseCount],
+      ["conversionRate", report.conversionRate],
+    ];
+  } else {
+    const report = await getRevenueReport();
+    rows = [["month", "totalPaid", "totalBilled"], ...report.items.map((item) => [item._id, item.totalPaid, item.totalBilled])];
+  }
+
+  return {
+    filename: `${type}-report.csv`,
+    mimeType: "text/csv",
+    content: rows.map((row) => row.join(",")).join("\n"),
+  };
+};
+
+const listSettings = async (query) => {
+  const filters = pickFilters(query, ["group", "key"]);
+  return listWithPagination({
+    model: Setting,
+    filter: filters,
+    query,
+    sort: parseSort(query.sortBy || "key", query.sortOrder || "asc"),
+  });
+};
+
+const patchSettings = async (payload) => {
+  const updates = payload.settings || [];
+  const results = [];
+
+  for (const item of updates) {
+    // eslint-disable-next-line no-await-in-loop
+    const saved = await Setting.findOneAndUpdate(
+      { key: item.key },
+      { $set: { value: item.value, group: item.group || "general" } },
+      { upsert: true, new: true }
+    );
+    results.push(saved);
+  }
+
+  return { items: results };
+};
+
+const getComplianceSummary = async () => {
+  const [totalLogs, byAction, sensitiveLogs] = await Promise.all([
+    AuditTrail.countDocuments({}),
+    AuditTrail.aggregate([{ $group: { _id: "$actionType", count: { $sum: 1 } } }]),
+    AuditTrail.countDocuments({ sensitivity: "sensitive" }),
+  ]);
+
+  return {
+    totalLogs,
+    sensitiveLogs,
+    byAction,
+  };
+};
+
+const getUserProfile = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+  return buildSafeUser(user);
+};
+
+const updateUserProfile = async (userId, payload) => {
+  const updates = pickFilters(payload, ["firstName", "lastName", "phone", "avatarUrl", "country"]);
+  const user = await User.findByIdAndUpdate(userId, { $set: updates }, { new: true });
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+  return buildSafeUser(user);
+};
+
+const getUserApplicantIds = async (userId) => {
+  const applicants = await Applicant.find({
+    $or: [{ userId }, { createdBy: userId }],
+  }).select("_id");
+  return applicants.map((item) => item._id);
+};
+
+const listUserApplications = async (userId, query) => {
+  const applicantIds = await getUserApplicantIds(userId);
+  return listWithPagination({
+    model: Case,
+    filter: { applicantId: { $in: applicantIds } },
+    query,
+    sort: parseSort(query.sortBy || "createdAt", query.sortOrder || "desc"),
+    populate: ["applicantId", "leadId", "assignedStaff"],
+  });
+};
+
+const getUserApplication = async (userId, caseId) => {
+  const applicantIds = await getUserApplicantIds(userId);
+  const item = await Case.findOne({ _id: caseId, applicantId: { $in: applicantIds } }).populate(
+    "applicantId leadId assignedStaff"
+  );
+  if (!item) {
+    throw new ApiError(404, "CASE_NOT_FOUND", "Application not found");
+  }
+  return item;
+};
+
+const listUserDocuments = async (userId, query) => {
+  const applicantIds = await getUserApplicantIds(userId);
+  return listWithPagination({
+    model: CaseDocument,
+    filter: { applicantId: { $in: applicantIds }, isArchived: false },
+    query,
+    sort: parseSort(query.sortBy || "createdAt", query.sortOrder || "desc"),
+    populate: ["caseId", "applicantId"],
+  });
+};
+
+const uploadUserDocument = async (userId, payload) => {
+  const applicantIds = await getUserApplicantIds(userId);
+  if (!applicantIds.some((id) => String(id) === String(payload.applicantId))) {
+    throw new ApiError(403, "FORBIDDEN", "Applicant access denied");
+  }
+
+  const document = await uploadCaseDocument(payload, userId);
+  return document;
+};
+
+const listUserPayments = async (userId, query) => {
+  const applicantIds = await getUserApplicantIds(userId);
+  return listWithPagination({
+    model: PaymentTransaction,
+    filter: { applicantId: { $in: applicantIds } },
+    query,
+    sort: parseSort(query.sortBy || "createdAt", query.sortOrder || "desc"),
+    populate: ["caseId", "invoiceId"],
+  });
+};
+
+const listUserAppointments = async (userId, query) => {
+  const applicantIds = await getUserApplicantIds(userId);
+  return listWithPagination({
+    model: Appointment,
+    filter: { applicantId: { $in: applicantIds } },
+    query,
+    sort: parseSort(query.sortBy || "appointmentDate", query.sortOrder || "asc"),
+    populate: ["caseId", "applicantId"],
+  });
+};
+
 module.exports = {
   staffLogin,
   refreshStaffToken,
@@ -1441,4 +2532,74 @@ module.exports = {
   getDashboardSummary,
   recordConsent,
   listAuditTrail,
+  createPublicEligibility,
+  createPublicContact,
+  createPublicApplication,
+  updateLead,
+  convertLeadToApplicant,
+  convertLeadToCase,
+  updateApplicant,
+  uploadApplicantDocument,
+  listApplicantCases,
+  updateCase,
+  addCaseTimeline,
+  linkCaseChecklist,
+  linkCaseService,
+  createStaff,
+  updateStaff,
+  updateStaffStatus,
+  getDocumentById,
+  reviewDocument,
+  updateDocument,
+  deleteDocument,
+  listAppointments,
+  getAppointmentById,
+  updateAppointment,
+  updateAppointmentStatus,
+  deleteAppointment,
+  listPayments,
+  getPaymentById,
+  createPaymentIntent,
+  createManualPayment,
+  handleStripeWebhook,
+  updatePaymentStatus,
+  getPaymentInvoice,
+  createService,
+  listServices,
+  getServiceById,
+  updateService,
+  deleteService,
+  createChecklist,
+  listChecklists,
+  getChecklistById,
+  updateChecklist,
+  deleteChecklist,
+  createTemplate,
+  listTemplates,
+  getTemplateById,
+  updateTemplateV2,
+  deleteTemplate,
+  previewTemplate,
+  createCountryUpdate,
+  listCountryUpdates,
+  getCountryUpdateById,
+  updateCountryUpdate,
+  deleteCountryUpdate,
+  listPublicCountryUpdates,
+  getRevenueReport,
+  getConversionReport,
+  getStaffPerformanceReport,
+  getApplicationsReport,
+  getExportReport,
+  listSettings,
+  patchSettings,
+  getComplianceSummary,
+  getUserProfile,
+  updateUserProfile,
+  listUserApplications,
+  getUserApplication,
+  listUserDocuments,
+  uploadUserDocument,
+  listUserPayments,
+  listUserAppointments,
 };

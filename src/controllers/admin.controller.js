@@ -36,7 +36,18 @@ const getAdminStats = asyncHandler(async (_req, res) => {
 
 const listUsers = asyncHandler(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const { search, role } = req.query;
+  const { search, role, sortBy, sortOrder } = req.query;
+
+  const allowedSortFields = new Set([
+    "createdAt",
+    "firstName",
+    "lastName",
+    "email",
+    "role",
+    "isActive",
+  ]);
+  const sortField = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
+  const sortDirection = sortOrder === "asc" ? 1 : -1;
 
   const filter = {};
   if (role) {
@@ -53,7 +64,7 @@ const listUsers = asyncHandler(async (req, res) => {
   const [items, total] = await Promise.all([
     User.find(filter)
       .select("-password")
-      .sort({ createdAt: -1 })
+      .sort({ [sortField]: sortDirection })
       .skip(skip)
       .limit(limit),
     User.countDocuments(filter),
@@ -66,6 +77,20 @@ const listUsers = asyncHandler(async (req, res) => {
 });
 
 const updateUser = asyncHandler(async (req, res) => {
+  const existingUser = await User.findById(req.params.userId).select("-password");
+
+  if (!existingUser) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  if (existingUser.role === "super_admin" && req.user.role !== "super_admin") {
+    throw new ApiError(403, "FORBIDDEN", "Only super admin can manage super admin accounts");
+  }
+
+  if (req.body.role === "super_admin" && req.user.role !== "super_admin") {
+    throw new ApiError(403, "FORBIDDEN", "Only super admin can assign super admin role");
+  }
+
   const updates = {};
 
   if (typeof req.body.role !== "undefined") {
@@ -85,6 +110,31 @@ const updateUser = asyncHandler(async (req, res) => {
   }
 
   return sendSuccess(res, 200, user);
+});
+
+const deleteUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  if (String(req.user._id) === String(userId)) {
+    throw new ApiError(400, "INVALID_OPERATION", "You cannot delete your own account");
+  }
+
+  const existingUser = await User.findById(userId).select("-password");
+
+  if (!existingUser) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  if (existingUser.role === "super_admin" && req.user.role !== "super_admin") {
+    throw new ApiError(403, "FORBIDDEN", "Only super admin can delete super admin accounts");
+  }
+
+  await User.findByIdAndDelete(userId);
+
+  return sendSuccess(res, 200, {
+    deleted: true,
+    userId,
+  });
 });
 
 const listConsultations = asyncHandler(async (req, res) => {
@@ -374,6 +424,7 @@ module.exports = {
   getAdminStats,
   listUsers,
   updateUser,
+  deleteUser,
   listConsultations,
   updateConsultationStatus,
   listCountriesAdmin,
