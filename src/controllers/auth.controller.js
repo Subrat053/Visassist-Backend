@@ -3,7 +3,8 @@ const { sendSuccess } = require("../utils/ApiResponse.js");
 const {
   forgotPassword,
   getMe,
-  loginUser,
+  loginCustomerUser,
+  loginStaffUser,
   logoutUser,
   refreshUserToken,
   resetPassword,
@@ -21,12 +22,12 @@ const signup = asyncHandler(async (req, res) => {
 });
 
 const login = asyncHandler(async (req, res) => {
-  const data = await loginUser(req.body, requestContext(req));
+  const data = await loginStaffUser(req.body, requestContext(req));
   return sendSuccess(res, 200, data);
 });
 
 const customerLogin = asyncHandler(async (req, res) => {
-  const data = await loginUser(req.body, requestContext(req));
+  const data = await loginCustomerUser(req.body, requestContext(req));
   return sendSuccess(res, 200, data);
 });
 

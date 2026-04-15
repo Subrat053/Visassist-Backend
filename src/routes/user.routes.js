@@ -11,6 +11,7 @@ const router = Router();
 router.get("/profile", requireAuth, userVisaControllers.getUserProfile);
 router.put("/profile", requireAuth, userVisaControllers.updateUserProfile);
 router.patch("/profile", requireAuth, userVisaControllers.updateUserProfile);
+router.post("/profile/avatar", requireAuth, upload.single("file"), userVisaControllers.uploadUserAvatar);
 
 router.get("/applications", requireAuth, userVisaControllers.listUserApplications);
 router.get("/applications/:id", requireAuth, userVisaControllers.getUserApplicationById);

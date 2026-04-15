@@ -26,6 +26,11 @@ const updateUserProfile = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, user);
 });
 
+const uploadUserAvatar = asyncHandler(async (req, res) => {
+  const data = await visaPortalService.uploadUserAvatar(req.user._id, req.file);
+  return sendSuccess(res, 200, data);
+});
+
 const listUserApplications = asyncHandler(async (req, res) => {
   const data = await visaPortalService.listUserApplications(req.user._id, req.query);
   return sendSuccess(res, 200, data);
@@ -69,6 +74,7 @@ const getUserDashboardSummary = asyncHandler(async (req, res) => {
 module.exports = {
   getUserProfile,
   updateUserProfile,
+  uploadUserAvatar,
   listUserApplications,
   getUserApplicationById,
   createUserApplication,

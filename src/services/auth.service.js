@@ -12,19 +12,43 @@ const buildSafeUser = (user) => ({
   fullName: user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim(),
   email: user.email,
   role: user.role === "user" ? "customer" : user.role,
+  phone: user.phone || "",
+  avatarUrl: user.avatarUrl || "",
   isActive: Boolean(user.isActive),
 });
 
+const STAFF_ROLES = new Set([
+  "super_admin",
+  "admin",
+  "documentation_executive",
+  "support_executive",
+  "destination_specialist",
+  "adviser",
+  "support",
+]);
+
+const CUSTOMER_ROLES = new Set(["customer", "user"]);
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
 const signupUser = async (payload, context) => {
-  const exists = await User.findOne({ email: payload.email.toLowerCase() });
+  const normalizedEmail = normalizeEmail(payload.email);
+  const exists = await User.findOne({ email: normalizedEmail });
   if (exists) {
+    if (exists.isDeleted || exists.isActive === false) {
+      throw new ApiError(
+        409,
+        "ACCOUNT_INACTIVE",
+        "An account with this email already exists but is inactive. Please contact support."
+      );
+    }
     throw new ApiError(409, "USER_EXISTS", "Email is already registered");
   }
 
   const user = await User.create({
     firstName: payload.firstName,
     lastName: payload.lastName,
-    email: payload.email.toLowerCase(),
+    email: normalizedEmail,
     phone: payload.phone || "",
     password: payload.password,
     role: "customer",
@@ -38,16 +62,53 @@ const signupUser = async (payload, context) => {
   };
 };
 
-const loginUser = async (payload, context) => {
-  const user = await User.findOne({ email: payload.email.toLowerCase(), isActive: true }).select("+password");
+const authenticateUser = async (payload) => {
+  const normalizedEmail = normalizeEmail(payload.email);
+  const user = await User.findOne({ email: normalizedEmail }).select("+password");
 
   if (!user) {
     throw new ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password");
   }
 
+  if (user.isDeleted) {
+    throw new ApiError(403, "ACCOUNT_DELETED", "This account has been deleted. Please contact support.");
+  }
+
+  if (user.isActive === false) {
+    throw new ApiError(403, "ACCOUNT_INACTIVE", "This account is inactive. Please contact support.");
+  }
+
   const isValid = await user.comparePassword(payload.password);
   if (!isValid) {
     throw new ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password");
+  }
+
+  return user;
+};
+
+const loginStaffUser = async (payload, context) => {
+  const user = await authenticateUser(payload);
+
+  if (!STAFF_ROLES.has(user.role)) {
+    throw new ApiError(403, "INVALID_ROLE", "This login is only available for staff users");
+  }
+
+  user.lastLoginAt = new Date();
+  await user.save();
+
+  const tokens = await issueAuthTokens(user, context);
+
+  return {
+    user: buildSafeUser(user),
+    ...tokens,
+  };
+};
+
+const loginCustomerUser = async (payload, context) => {
+  const user = await authenticateUser(payload);
+
+  if (!CUSTOMER_ROLES.has(user.role)) {
+    throw new ApiError(403, "INVALID_ROLE", "This login is only available for customer users");
   }
 
   user.lastLoginAt = new Date();
@@ -91,7 +152,7 @@ const refreshUserToken = async (refreshToken, context) => {
 };
 
 const forgotPassword = async (email) => {
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await User.findOne({ email: normalizeEmail(email), isDeleted: { $ne: true } });
   if (!user) {
     return;
   }
@@ -129,4 +190,13 @@ const resetPassword = async ({ token, newPassword }) => {
   await user.save();
 };
 
-module.exports = { signupUser, loginUser, logoutUser, refreshUserToken, forgotPassword, resetPassword, getMe };
+module.exports = {
+  signupUser,
+  loginStaffUser,
+  loginCustomerUser,
+  logoutUser,
+  refreshUserToken,
+  forgotPassword,
+  resetPassword,
+  getMe,
+};

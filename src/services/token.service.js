@@ -60,6 +60,12 @@ const rotateRefreshToken = async (refreshToken, context = {}) => {
     return null;
   }
 
+  if (tokenDoc.user.isDeleted || tokenDoc.user.isActive === false) {
+    tokenDoc.revokedAt = new Date();
+    await tokenDoc.save();
+    return null;
+  }
+
   tokenDoc.revokedAt = new Date();
   await tokenDoc.save();
 

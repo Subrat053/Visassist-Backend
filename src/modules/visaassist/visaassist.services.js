@@ -44,6 +44,7 @@ const buildSafeUser = (user) => ({
   email: user.email,
   role: user.role,
   phone: user.phone,
+  avatarUrl: user.avatarUrl || "",
   isActive: Boolean(user.isActive),
 });
 
@@ -53,6 +54,8 @@ const slugify = (value) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
 const ensureValidRole = (role) => {
   if (!ROLES.includes(role)) {
@@ -92,10 +95,18 @@ const isCaseStaffMember = (caseRecord, userId) => {
 const isMongoObjectId = (value) => /^[0-9a-fA-F]{24}$/.test(String(value || ""));
 
 const staffLogin = async (payload, context) => {
-  const user = await User.findOne({ email: payload.email.toLowerCase(), isActive: true }).select("+password");
+  const user = await User.findOne({ email: normalizeEmail(payload.email) }).select("+password");
 
   if (!user) {
     throw new ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password");
+  }
+
+  if (user.isDeleted) {
+    throw new ApiError(403, "ACCOUNT_DELETED", "This account has been deleted. Please contact support.");
+  }
+
+  if (user.isActive === false) {
+    throw new ApiError(403, "ACCOUNT_INACTIVE", "This account is inactive. Please contact support.");
   }
 
   const valid = await user.comparePassword(payload.password);

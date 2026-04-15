@@ -187,6 +187,11 @@ const deleteAdminUser = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, data);
 });
 
+const uploadAdminSiteAsset = asyncHandler(async (req, res) => {
+  const data = await visaPortalService.uploadAdminSiteAsset(req.file, req.user?._id || null);
+  return sendSuccess(res, 201, data);
+});
+
 module.exports = {
   getAdminDashboardSummary,
   listAdminCountries,
@@ -225,4 +230,5 @@ module.exports = {
   getAdminUserById,
   updateAdminUserStatus,
   deleteAdminUser,
+  uploadAdminSiteAsset,
 };

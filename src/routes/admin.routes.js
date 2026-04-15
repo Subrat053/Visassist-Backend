@@ -17,6 +17,8 @@ const {
   updateUser,
 } = require("../controllers/admin.controller.js");
 const adminVisaControllers = require("../controllers/adminVisa.controller.js");
+const visaassistControllers = require("../modules/visaassist/visaassist.controllers.js");
+const visaassistValidators = require("../modules/visaassist/visaassist.validators.js");
 const { requireAuth } = require("../middlewares/auth.middleware.js");
 const { requireRoles } = require("../middlewares/role.middleware.js");
 const upload = require("../middlewares/upload.middleware.js");
@@ -28,12 +30,15 @@ router.use(requireAuth, requireRoles("admin", "super_admin"));
 
 router.get("/stats", getAdminStats);
 router.get("/dashboard-summary", adminVisaControllers.getAdminDashboardSummary);
+router.get("/settings", visaassistControllers.getSettings);
+router.patch("/settings", validate(visaassistValidators.settingPatchSchema), visaassistControllers.patchSettings);
+router.post("/settings/assets", upload.single("file"), adminVisaControllers.uploadAdminSiteAsset);
 
 router.get("/users", adminVisaControllers.listAdminUsers);
 router.get("/users/:id", adminVisaControllers.getAdminUserById);
-router.patch("/users/:userId", validate(visaPortalValidators.userStatusSchema), adminVisaControllers.updateAdminUserStatus);
+router.patch("/users/:id", validate(visaPortalValidators.userStatusSchema), adminVisaControllers.updateAdminUserStatus);
 router.patch("/users/:id/status", validate(visaPortalValidators.userStatusSchema), adminVisaControllers.updateAdminUserStatus);
-router.delete("/users/:userId", adminVisaControllers.deleteAdminUser);
+router.delete("/users/:id", adminVisaControllers.deleteAdminUser);
 
 router.get("/consultations", listConsultations);
 router.patch("/consultations/:consultationId/status", updateConsultationStatus);

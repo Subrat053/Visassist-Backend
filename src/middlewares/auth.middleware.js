@@ -24,6 +24,10 @@ const requireAuth = async (req, _res, next) => {
 			throw new ApiError(401, "UNAUTHORIZED", "Invalid token user");
 		}
 
+		if (user.isDeleted || user.isActive === false) {
+			throw new ApiError(401, "UNAUTHORIZED", "Account is inactive or deleted");
+		}
+
 		req.user = user;
 		next();
 	} catch (error) {
@@ -44,7 +48,7 @@ const optionalAuth = async (req, _res, next) => {
 
 		const payload = verifyAccessToken(token);
 		const user = await User.findById(payload.sub).select("-password");
-		if (user) {
+		if (user && !user.isDeleted && user.isActive !== false) {
 			req.user = user;
 		}
 

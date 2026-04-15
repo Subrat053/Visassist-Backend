@@ -9,6 +9,8 @@ const {
   TICKET_STATUSES,
   TICKET_PRIORITIES,
 } = require("../models/SupportTicket.js");
+const Setting = require("../models/Setting.js");
+const { visaTypesSeed } = require("../seed/visaTypes.data.js");
 const User = require("../models/User.js");
 const { uploadDocumentBuffer } = require("./cloudinary.service.js");
 const ApiError = require("../utils/ApiError.js");
@@ -38,6 +40,30 @@ const ALLOWED_FILE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+
+const PUBLIC_SITE_SETTINGS_DEFAULTS = {
+  siteName: "Visaassist",
+  siteTagline: "Global Services",
+  siteLogoUrl: "",
+  supportPhone: "+91 12345 67890",
+  whatsappNumber: "911234567890",
+  homeBannerTitle: "What can we do for you today?",
+  homeBannerSubtitle:
+    "Choose your goal and let us guide you with the right solution, expert support, and the best next steps for your journey.",
+  homeBannerImageUrl:
+    "https://media.istockphoto.com/id/1197578214/photo/beautiful-young-woman.jpg?s=612x612&w=0&k=20&c=XdV1GLQalvNSXKsBv4C0vRDjPfiBOArH6BC_iCFtchg=",
+};
+
+const PUBLIC_SITE_SETTING_KEYS = {
+  siteName: "site.name",
+  siteTagline: "site.tagline",
+  siteLogoUrl: "site.logoUrl",
+  supportPhone: "site.supportPhone",
+  whatsappNumber: "site.whatsappNumber",
+  homeBannerTitle: "site.homeBannerTitle",
+  homeBannerSubtitle: "site.homeBannerSubtitle",
+  homeBannerImageUrl: "site.homeBannerImageUrl",
+};
 
 const slugify = (value) =>
   String(value || "")
@@ -197,6 +223,128 @@ const normalizeTimeline = (input) => {
       };
     })
     .filter((item) => item.label || item.description);
+};
+
+const buildCountrySlugCandidates = (countrySlug = "") => {
+  const normalized = slugify(countrySlug);
+  const compact = normalized.replace(/-/g, "");
+  const candidates = new Set([normalized, compact]);
+
+  if (["uk", "united-kingdom", "unitedkingdom", "great-britain", "greatbritain"].includes(normalized)) {
+    candidates.add("uk");
+    candidates.add("united-kingdom");
+    candidates.add("unitedkingdom");
+  }
+
+  if (["usa", "us", "united-states", "unitedstates", "united-states-of-america"].includes(normalized)) {
+    candidates.add("usa");
+    candidates.add("united-states");
+    candidates.add("unitedstates");
+  }
+
+  if (["new-zealand", "newzealand"].includes(normalized)) {
+    candidates.add("new-zealand");
+    candidates.add("newzealand");
+  }
+
+  return Array.from(candidates).filter(Boolean);
+};
+
+const buildVisaTypeSlugCandidates = (visaTypeSlug = "") => {
+  const normalized = slugify(visaTypeSlug);
+  const candidates = new Set([normalized]);
+
+  if (normalized.endsWith("-visa")) {
+    candidates.add(normalized.replace(/-visa$/, ""));
+  } else if (normalized) {
+    candidates.add(`${normalized}-visa`);
+  }
+
+  return Array.from(candidates).filter(Boolean);
+};
+
+const toSeedVisaTypePayload = (item, index) => ({
+  _id: `seed-${slugify(item.countrySlug)}-${slugify(item.visaTypeSlug)}-${index}`,
+  countryId: null,
+  visaCategoryId: null,
+  countrySlug: slugify(item.countrySlug),
+  visaTypeSlug: slugify(item.visaTypeSlug),
+  countryName: trim(item.countryName) || trim(item.countrySlug),
+  visaTypeName: trim(item.visaTypeName) || trim(item.visaTypeSlug),
+  title: trim(item.title),
+  badge: trim(item.badge),
+  subtitle: trim(item.subtitle),
+  heroImage: trim(item.heroImage),
+  iconKey: slugify(item.iconKey || "plane"),
+  overview: trim(item.overview),
+  serviceHighlights: normalizeServiceHighlights(item.serviceHighlights),
+  eligibility: normalizeStringArray(item.eligibility),
+  requiredDocs: normalizeRequiredDocs(item.requiredDocs),
+  process: normalizeProcess(item.process),
+  timeline: normalizeTimeline(item.timeline),
+  faqs: normalizeFaqs(item.faqs),
+  ctaTitle: trim(item.ctaTitle),
+  ctaText: trim(item.ctaText),
+  seoTitle: trim(item.seoTitle),
+  seoDescription: trim(item.seoDescription),
+  metaKeywords: normalizeStringArray(item.metaKeywords),
+  isActive: item.isActive !== false,
+  isFeatured: Boolean(item.isFeatured),
+  sortOrder: Number(item.sortOrder) || 0,
+  applicationEnabled: true,
+  consultationEnabled: true,
+});
+
+const SEED_VISA_TYPE_ITEMS = (Array.isArray(visaTypesSeed) ? visaTypesSeed : []).map((item, index) =>
+  toSeedVisaTypePayload(item, index)
+);
+
+const SEED_COUNTRY_ITEMS = Array.from(
+  SEED_VISA_TYPE_ITEMS.reduce((accumulator, item) => {
+    if (!accumulator.has(item.countrySlug)) {
+      accumulator.set(item.countrySlug, {
+        _id: `seed-country-${item.countrySlug}`,
+        name: item.countryName,
+        slug: item.countrySlug,
+        code: "",
+        flagImage: "",
+        heroImage: "",
+        description: "",
+        isActive: true,
+        sortOrder: item.sortOrder || 0,
+        createdAt: null,
+        updatedAt: null,
+      });
+    }
+    return accumulator;
+  }, new Map()).values()
+);
+
+const matchSeedCountry = (countrySlugCandidates = []) => {
+  const variants = new Set(countrySlugCandidates);
+  return SEED_COUNTRY_ITEMS.find((item) => variants.has(item.slug) || variants.has(item.slug.replace(/-/g, ""))) || null;
+};
+
+const matchSeedVisaTypesByCountry = (countrySlugCandidates = []) => {
+  const variants = new Set(countrySlugCandidates);
+  return SEED_VISA_TYPE_ITEMS.filter(
+    (item) => variants.has(item.countrySlug) || variants.has(item.countrySlug.replace(/-/g, ""))
+  );
+};
+
+const matchSeedVisaType = (countrySlugCandidates = [], visaTypeSlugCandidates = []) => {
+  const countryVariants = new Set(countrySlugCandidates);
+  const visaTypeVariants = new Set(visaTypeSlugCandidates);
+
+  return (
+    SEED_VISA_TYPE_ITEMS.find((item) => {
+      const countryMatch =
+        countryVariants.has(item.countrySlug) || countryVariants.has(item.countrySlug.replace(/-/g, ""));
+      const visaTypeMatch =
+        visaTypeVariants.has(item.visaTypeSlug) || visaTypeVariants.has(item.visaTypeSlug.replace(/-/g, ""));
+      return countryMatch && visaTypeMatch;
+    }) || null
+  );
 };
 
 const hasOwn = (payload, key) => Object.prototype.hasOwnProperty.call(payload || {}, key);
@@ -371,7 +519,13 @@ const getCountryVisaTypeForApplication = async (payload) => {
     throw new ApiError(422, "VALIDATION_ERROR", "countrySlug and visaTypeSlug are required");
   }
 
-  const found = await CountryVisaType.findOne({ countrySlug, visaTypeSlug })
+  const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
+  const visaTypeSlugCandidates = buildVisaTypeSlugCandidates(visaTypeSlug);
+
+  const found = await CountryVisaType.findOne({
+    countrySlug: { $in: countrySlugCandidates },
+    visaTypeSlug: { $in: visaTypeSlugCandidates },
+  })
     .populate("countryId", "name slug")
     .populate("visaCategoryId", "name slug iconKey")
     .lean();
@@ -425,6 +579,34 @@ const uploadApplicationFiles = async (files, countrySlug, visaTypeSlug) => {
   }
 
   return uploaded;
+};
+
+const getPublicSiteSettings = async () => {
+  const settingKeys = Object.values(PUBLIC_SITE_SETTING_KEYS);
+  const items = await Setting.find({ key: { $in: settingKeys } }).select("key value").lean();
+
+  const valueMap = new Map(items.map((item) => [item.key, item.value]));
+
+  const values = {
+    siteName: trim(valueMap.get(PUBLIC_SITE_SETTING_KEYS.siteName) || PUBLIC_SITE_SETTINGS_DEFAULTS.siteName),
+    siteTagline: trim(valueMap.get(PUBLIC_SITE_SETTING_KEYS.siteTagline) || PUBLIC_SITE_SETTINGS_DEFAULTS.siteTagline),
+    siteLogoUrl: trim(valueMap.get(PUBLIC_SITE_SETTING_KEYS.siteLogoUrl) || PUBLIC_SITE_SETTINGS_DEFAULTS.siteLogoUrl),
+    supportPhone: trim(valueMap.get(PUBLIC_SITE_SETTING_KEYS.supportPhone) || PUBLIC_SITE_SETTINGS_DEFAULTS.supportPhone),
+    whatsappNumber: trim(
+      valueMap.get(PUBLIC_SITE_SETTING_KEYS.whatsappNumber) || PUBLIC_SITE_SETTINGS_DEFAULTS.whatsappNumber
+    ),
+    homeBannerTitle: trim(
+      valueMap.get(PUBLIC_SITE_SETTING_KEYS.homeBannerTitle) || PUBLIC_SITE_SETTINGS_DEFAULTS.homeBannerTitle
+    ),
+    homeBannerSubtitle: trim(
+      valueMap.get(PUBLIC_SITE_SETTING_KEYS.homeBannerSubtitle) || PUBLIC_SITE_SETTINGS_DEFAULTS.homeBannerSubtitle
+    ),
+    homeBannerImageUrl: trim(
+      valueMap.get(PUBLIC_SITE_SETTING_KEYS.homeBannerImageUrl) || PUBLIC_SITE_SETTINGS_DEFAULTS.homeBannerImageUrl
+    ),
+  };
+
+  return { values };
 };
 
 const buildApplicantDetails = (payload) => {
@@ -746,7 +928,17 @@ const normalizeCountryVisaTypePayload = async (payload = {}, actorId = null, opt
   return updates;
 };
 
-const createVisaApplication = async ({ payload, files = [], actorUserId = null, source = "website" }) => {
+const createVisaApplication = async ({
+  payload,
+  files = [],
+  actorUserId = null,
+  source = "website",
+  requireAuthenticatedUser = false,
+}) => {
+  if (requireAuthenticatedUser && !actorUserId) {
+    throw new ApiError(401, "UNAUTHORIZED", "Please login or register before submitting a visa application.");
+  }
+
   const countryVisaType = await getCountryVisaTypeForApplication(payload);
 
   if (!countryVisaType.applicationEnabled) {
@@ -848,6 +1040,53 @@ const createVisaApplication = async ({ payload, files = [], actorUserId = null, 
   return created;
 };
 
+const uploadAdminSiteAsset = async (file, actorId = null) => {
+  if (!file) {
+    throw new ApiError(422, "VALIDATION_ERROR", "File is required");
+  }
+
+  if (!String(file.mimetype || "").startsWith("image/")) {
+    throw new ApiError(422, "INVALID_FILE_TYPE", "Only image files are allowed for site assets");
+  }
+
+  const uploadResult = await uploadDocumentBuffer(file.buffer, file.mimetype, "y-axis/site-settings");
+
+  return {
+    fileUrl: uploadResult.secure_url,
+    publicId: uploadResult.public_id,
+    originalName: file.originalname,
+    mimeType: file.mimetype,
+    size: file.size,
+    uploadedBy: actorId || null,
+  };
+};
+
+const uploadUserAvatar = async (userId, file) => {
+  if (!file) {
+    throw new ApiError(422, "VALIDATION_ERROR", "Avatar file is required");
+  }
+
+  if (!String(file.mimetype || "").startsWith("image/")) {
+    throw new ApiError(422, "INVALID_FILE_TYPE", "Only image files are allowed for avatars");
+  }
+
+  const uploadResult = await uploadDocumentBuffer(file.buffer, file.mimetype, `y-axis/users/${userId}/avatar`);
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    { avatarUrl: uploadResult.secure_url },
+    { new: true, runValidators: true }
+  )
+    .select("firstName lastName fullName email phone role country profile avatarUrl isActive")
+    .lean();
+
+  if (!user) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  return user;
+};
+
 const ensureOwnershipOfApplication = async (applicationId, userId) => {
   const application = await VisaApplication.findById(applicationId);
   if (!application) {
@@ -901,7 +1140,8 @@ const listPublicCountries = async (query = {}) => {
 };
 
 const getPublicCountryBySlug = async (countrySlug) => {
-  const country = await Country.findOne({ slug: slugify(countrySlug), isActive: true }).lean();
+  const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
+  const country = await Country.findOne({ slug: { $in: countrySlugCandidates }, isActive: true }).lean();
   if (!country) {
     throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
   }
@@ -910,26 +1150,35 @@ const getPublicCountryBySlug = async (countrySlug) => {
 };
 
 const listPublicVisaTypesByCountry = async (countrySlug) => {
-  const country = await Country.findOne({ slug: slugify(countrySlug), isActive: true }).lean();
-  if (!country) {
-    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
-  }
+  const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
+  const country = await Country.findOne({ slug: { $in: countrySlugCandidates }, isActive: true }).lean();
 
   const items = await CountryVisaType.find({
-    countryId: country._id,
+    countrySlug: { $in: countrySlugCandidates },
     isActive: true,
   })
     .populate("visaCategoryId", "name slug iconKey")
     .sort({ sortOrder: 1, updatedAt: -1 })
     .lean();
 
-  return items.map((item) => buildCountryVisaTypePayload(item));
+  const dbItems = items.map((item) => buildCountryVisaTypePayload(item));
+
+  if (!country && dbItems.length === 0) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  return dbItems.sort(
+    (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || String(a.title || "").localeCompare(String(b.title || ""))
+  );
 };
 
 const getPublicVisaTypeContent = async (countrySlug, visaTypeSlug) => {
+  const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
+  const visaTypeSlugCandidates = buildVisaTypeSlugCandidates(visaTypeSlug);
+
   const item = await CountryVisaType.findOne({
-    countrySlug: slugify(countrySlug),
-    visaTypeSlug: slugify(visaTypeSlug),
+    countrySlug: { $in: countrySlugCandidates },
+    visaTypeSlug: { $in: visaTypeSlugCandidates },
     isActive: true,
   })
     .populate("countryId", "name slug")
@@ -944,18 +1193,7 @@ const getPublicVisaTypeContent = async (countrySlug, visaTypeSlug) => {
 };
 
 const getPublicApplicationConfig = async (countrySlug, visaTypeSlug) => {
-  const item = await CountryVisaType.findOne({
-    countrySlug: slugify(countrySlug),
-    visaTypeSlug: slugify(visaTypeSlug),
-    isActive: true,
-  })
-    .populate("countryId", "name slug")
-    .populate("visaCategoryId", "name slug iconKey")
-    .lean();
-
-  if (!item) {
-    throw new ApiError(404, "VISA_TYPE_NOT_FOUND", "Visa type not found");
-  }
+  const item = await getPublicVisaTypeContent(countrySlug, visaTypeSlug);
 
   if (!item.applicationEnabled) {
     throw new ApiError(422, "APPLICATION_DISABLED", "Application flow is disabled for this visa type");
@@ -984,13 +1222,15 @@ const getPublicApplicationConfig = async (countrySlug, visaTypeSlug) => {
 
 const searchPublicVisaTypes = async (query = {}) => {
   const filter = { isActive: true };
+  const countrySlugCandidates = query.country ? buildCountrySlugCandidates(query.country) : [];
+  const visaTypeSlugCandidates = query.type ? buildVisaTypeSlugCandidates(query.type) : [];
 
   if (query.country) {
-    filter.countrySlug = slugify(query.country);
+    filter.countrySlug = { $in: countrySlugCandidates };
   }
 
   if (query.type) {
-    filter.visaTypeSlug = slugify(query.type);
+    filter.visaTypeSlug = { $in: visaTypeSlugCandidates };
   }
 
   const items = await CountryVisaType.find(filter)
@@ -998,7 +1238,11 @@ const searchPublicVisaTypes = async (query = {}) => {
     .sort({ sortOrder: 1, title: 1 })
     .lean();
 
-  return items.map((item) => buildCountryVisaTypePayload(item));
+  const dbItems = items.map((item) => buildCountryVisaTypePayload(item));
+
+  return dbItems.sort(
+    (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || String(a.title || "").localeCompare(String(b.title || ""))
+  );
 };
 
 const createPublicEnquiry = async (payload, actorUserId = null) => {
@@ -1987,7 +2231,7 @@ const listAdminUsers = async (query = {}) => {
 
   const [items, total] = await Promise.all([
     User.find(filter)
-      .select("firstName lastName fullName email phone role isActive isDeleted createdAt updatedAt")
+      .select("firstName lastName fullName email phone role avatarUrl isActive isDeleted createdAt updatedAt")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -2174,6 +2418,7 @@ module.exports = {
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   VISA_APPLICATION_STATUSES,
+  getPublicSiteSettings,
   listPublicCountries,
   getPublicCountryBySlug,
   listPublicVisaTypesByCountry,
@@ -2181,6 +2426,8 @@ module.exports = {
   getPublicApplicationConfig,
   searchPublicVisaTypes,
   createVisaApplication,
+  uploadAdminSiteAsset,
+  uploadUserAvatar,
   createPublicEnquiry,
   listUserApplications,
   getUserApplicationById,

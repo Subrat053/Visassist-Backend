@@ -7,6 +7,11 @@ const listPublicCountries = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, data);
 });
 
+const getPublicSiteSettings = asyncHandler(async (_req, res) => {
+  const data = await visaPortalService.getPublicSiteSettings();
+  return sendSuccess(res, 200, data);
+});
+
 const getPublicCountryBySlug = asyncHandler(async (req, res) => {
   const data = await visaPortalService.getPublicCountryBySlug(req.params.countrySlug);
   return sendSuccess(res, 200, data);
@@ -33,6 +38,7 @@ const createPublicVisaApplication = asyncHandler(async (req, res) => {
     files: req.files || [],
     actorUserId: req.user?._id || null,
     source: "website",
+    requireAuthenticatedUser: true,
   });
 
   return sendSuccess(res, 201, data);
@@ -49,6 +55,7 @@ const searchPublicVisaTypes = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  getPublicSiteSettings,
   listPublicCountries,
   getPublicCountryBySlug,
   listPublicVisaTypesByCountry,
