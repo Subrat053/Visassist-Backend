@@ -1,5 +1,6 @@
 const Application = require("../models/Application.js");
 const Job = require("../models/Job.js");
+const { sendAdminFormNotification } = require("../services/email");
 const asyncHandler = require("../utils/asyncHandler.js");
 const ApiError = require("../utils/ApiError.js");
 const { sendSuccess } = require("../utils/ApiResponse.js");
@@ -53,7 +54,7 @@ const getJobById = asyncHandler(async (req, res) => {
 });
 
 const applyToJob = asyncHandler(async (req, res) => {
-  const job = await Job.findById(req.params.jobId).select("_id isActive");
+  const job = await Job.findById(req.params.jobId).select("_id isActive title company country");
   if (!job || !job.isActive) {
     throw new ApiError(404, "JOB_NOT_FOUND", "Job not found");
   }
@@ -68,6 +69,35 @@ const applyToJob = asyncHandler(async (req, res) => {
     job: job._id,
     coverLetter: req.body.coverLetter || "",
   });
+
+  try {
+    await sendAdminFormNotification({
+      formType: "job_application",
+      data: {
+        fullName: req.user?.fullName || `${req.user?.firstName || ""} ${req.user?.lastName || ""}`.trim(),
+        email: req.user?.email || "",
+        phone: req.user?.phone || "",
+        jobTitle: job.title || "",
+        company: job.company || "",
+        country: job.country || "",
+        coverLetter: application.coverLetter,
+        status: application.status,
+      },
+      record: application,
+      meta: {
+        sourceRoute: `/api/v1/jobs/${req.params.jobId}/apply`,
+        sourcePage: req.headers["x-page-path"] || "",
+        recordId: application._id,
+        replyTo: req.user?.email || undefined,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send job application notification", {
+      error: mailError.message,
+      recordId: String(application._id),
+      jobId: String(job._id),
+    });
+  }
 
   return sendSuccess(res, 201, application);
 });

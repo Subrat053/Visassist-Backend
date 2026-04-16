@@ -1,6 +1,7 @@
 const asyncHandler = require("../../utils/asyncHandler.js");
 const { sendSuccess } = require("../../utils/ApiResponse.js");
 const services = require("./visaassist.services.js");
+const { sendAdminFormNotification } = require("../../services/email");
 const { forgotPassword, resetPassword } = require("../../services/auth.service.js");
 const { generateInvoicePdfBuffer } = require("../../utils/invoicePdf.js");
 
@@ -43,6 +44,39 @@ const updateMyProfile = asyncHandler(async (req, res) => {
 
 const createLead = asyncHandler(async (req, res) => {
   const data = await services.createLead(req.body, req.user?._id || null);
+
+  const isPublicLeadCapture = req.originalUrl.includes("/public/leads");
+  if (isPublicLeadCapture) {
+    try {
+      await sendAdminFormNotification({
+        formType: "public_lead_capture",
+        data: {
+          ...req.body,
+          fullName: data.fullName,
+          email: data.email,
+          phone: data.phone,
+          destinationCountry: data.destinationCountry,
+          visaCategory: data.visaCategory,
+          source: data.source,
+          priorRefusal: data.priorRefusal,
+          notes: data.notes,
+          stage: data.stage,
+        },
+        record: data,
+        meta: {
+          sourceRoute: "/api/v1/visaassist/public/leads",
+          sourcePage: req.headers["x-page-path"] || "",
+          replyTo: data.email,
+        },
+      });
+    } catch (mailError) {
+      console.error("[FORM_MAIL] Failed to send public lead notification", {
+        error: mailError.message,
+        recordId: String(data._id),
+      });
+    }
+  }
+
   return sendSuccess(res, 201, data);
 });
 

@@ -13,6 +13,7 @@ const Setting = require("../models/Setting.js");
 const { visaTypesSeed } = require("../seed/visaTypes.data.js");
 const User = require("../models/User.js");
 const { uploadDocumentBuffer } = require("./cloudinary.service.js");
+const { sendAdminFormNotification } = require("./email");
 const ApiError = require("../utils/ApiError.js");
 const { getPagination, getPaginationMeta } = require("../utils/pagination.js");
 
@@ -90,6 +91,27 @@ const parseIfJson = (value, fallback) => {
   } catch (_error) {
     return fallback;
   }
+};
+
+const parseQueryBoolean = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
 };
 
 const normalizeStringArray = (input) => {
@@ -497,12 +519,16 @@ const ensureUserForApplication = async (payload, actorUserId = null) => {
 const getCountryVisaTypeForApplication = async (payload) => {
   if (payload.countryVisaTypeId) {
     const found = await CountryVisaType.findById(payload.countryVisaTypeId)
-      .populate("countryId", "name slug")
+      .populate("countryId", "name slug isActive")
       .populate("visaCategoryId", "name slug iconKey")
       .lean();
 
     if (!found) {
       throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Selected visa type configuration not found");
+    }
+
+    if (!found.countryId || found.countryId.isActive === false) {
+      throw new ApiError(422, "COUNTRY_INACTIVE", "Selected country is inactive");
     }
 
     if (!found.isActive) {
@@ -522,15 +548,28 @@ const getCountryVisaTypeForApplication = async (payload) => {
   const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
   const visaTypeSlugCandidates = buildVisaTypeSlugCandidates(visaTypeSlug);
 
+  const country = await Country.findOne({
+    slug: { $in: countrySlugCandidates },
+    isActive: true,
+  })
+    .select("_id name slug")
+    .lean();
+
+  if (!country) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
   const found = await CountryVisaType.findOne({
+    countryId: country._id,
     countrySlug: { $in: countrySlugCandidates },
     visaTypeSlug: { $in: visaTypeSlugCandidates },
+    isActive: true,
   })
-    .populate("countryId", "name slug")
+    .populate("countryId", "name slug isActive")
     .populate("visaCategoryId", "name slug iconKey")
     .lean();
 
-  if (!found || !found.isActive) {
+  if (!found) {
     throw new ApiError(404, "COUNTRY_VISA_TYPE_NOT_FOUND", "Selected visa type configuration not found");
   }
 
@@ -1037,6 +1076,37 @@ const createVisaApplication = async ({
     }
   }
 
+  try {
+    await sendAdminFormNotification({
+      formType: "visa_application",
+      data: {
+        applicationNumber: created?.applicationNumber,
+        countrySlug: created?.countrySlug,
+        visaTypeSlug: created?.visaTypeSlug,
+        status: created?.status,
+        paymentStatus: created?.paymentStatus,
+        source: created?.source,
+        consentAccepted: payload?.consentAccepted,
+        disclaimerAccepted: payload?.disclaimerAccepted,
+        refundPolicyAccepted: payload?.refundPolicyAccepted,
+        applicantDetails,
+      },
+      record: created,
+      meta: {
+        sourceRoute: source === "dashboard" ? "/api/v1/user/applications" : "/api/v1/public/visa-applications",
+        sourcePage: trim(payload?.pageSource),
+        replyTo: applicantDetails?.email,
+        files: submittedDocs,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send visa application notification", {
+      error: mailError.message,
+      recordId: String(created?._id || ""),
+      formType: "visa_application",
+    });
+  }
+
   return created;
 };
 
@@ -1122,10 +1192,85 @@ const uploadTicketFiles = async (files, userId) => {
   return attachments;
 };
 
+const parseAttachmentUrls = (value) => {
+  const parsed = parseIfJson(value, value);
+
+  let rawValues = [];
+  if (Array.isArray(parsed)) {
+    rawValues = parsed;
+  } else if (typeof parsed === "string") {
+    rawValues = parsed.split(/[\n,]/g);
+  }
+
+  const unique = new Set();
+  for (const candidate of rawValues) {
+    const normalized = trim(candidate);
+    if (!normalized) {
+      continue;
+    }
+
+    let parsedUrl = null;
+    try {
+      parsedUrl = new URL(normalized);
+    } catch (_error) {
+      parsedUrl = null;
+    }
+
+    if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
+      continue;
+    }
+
+    unique.add(parsedUrl.toString());
+  }
+
+  return Array.from(unique);
+};
+
+const buildUrlAttachments = (urls = []) => {
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return [];
+  }
+
+  return urls.map((fileUrl) => {
+    let originalName = "External link";
+
+    try {
+      const parsedUrl = new URL(fileUrl);
+      const segments = parsedUrl.pathname.split("/").filter(Boolean);
+      originalName = decodeURIComponent(segments[segments.length - 1] || parsedUrl.hostname || "External link");
+    } catch (_error) {
+      originalName = "External link";
+    }
+
+    return {
+      fileUrl,
+      publicId: "",
+      originalName,
+      mimeType: "url",
+      size: 0,
+    };
+  });
+};
+
 const listPublicCountries = async (query = {}) => {
   const filter = {
     isActive: true,
   };
+
+  const applyEnabledOnly = parseQueryBoolean(query.applicationEnabled ?? query.forApplication);
+  if (applyEnabledOnly === true) {
+    const eligibleCountryIds = await CountryVisaType.distinct("countryId", {
+      isActive: true,
+      applicationEnabled: true,
+      countryId: { $ne: null },
+    });
+
+    if (eligibleCountryIds.length === 0) {
+      return [];
+    }
+
+    filter._id = { $in: eligibleCountryIds };
+  }
 
   if (query.search) {
     filter.$or = [
@@ -1149,23 +1294,35 @@ const getPublicCountryBySlug = async (countrySlug) => {
   return buildCountryPayload(country);
 };
 
-const listPublicVisaTypesByCountry = async (countrySlug) => {
+const listPublicVisaTypesByCountry = async (countrySlug, query = {}) => {
   const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
   const country = await Country.findOne({ slug: { $in: countrySlugCandidates }, isActive: true }).lean();
 
-  const items = await CountryVisaType.find({
+  if (!country) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
+  const filter = {
     countrySlug: { $in: countrySlugCandidates },
     isActive: true,
-  })
+  };
+
+  const applicationEnabled = parseQueryBoolean(query.applicationEnabled);
+  if (applicationEnabled !== undefined) {
+    filter.applicationEnabled = applicationEnabled;
+  }
+
+  const consultationEnabled = parseQueryBoolean(query.consultationEnabled);
+  if (consultationEnabled !== undefined) {
+    filter.consultationEnabled = consultationEnabled;
+  }
+
+  const items = await CountryVisaType.find(filter)
     .populate("visaCategoryId", "name slug iconKey")
     .sort({ sortOrder: 1, updatedAt: -1 })
     .lean();
 
   const dbItems = items.map((item) => buildCountryVisaTypePayload(item));
-
-  if (!country && dbItems.length === 0) {
-    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
-  }
 
   return dbItems.sort(
     (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || String(a.title || "").localeCompare(String(b.title || ""))
@@ -1176,7 +1333,19 @@ const getPublicVisaTypeContent = async (countrySlug, visaTypeSlug) => {
   const countrySlugCandidates = buildCountrySlugCandidates(countrySlug);
   const visaTypeSlugCandidates = buildVisaTypeSlugCandidates(visaTypeSlug);
 
+  const country = await Country.findOne({
+    slug: { $in: countrySlugCandidates },
+    isActive: true,
+  })
+    .select("_id name slug")
+    .lean();
+
+  if (!country) {
+    throw new ApiError(404, "COUNTRY_NOT_FOUND", "Country not found");
+  }
+
   const item = await CountryVisaType.findOne({
+    countryId: country._id,
     countrySlug: { $in: countrySlugCandidates },
     visaTypeSlug: { $in: visaTypeSlugCandidates },
     isActive: true,
@@ -1225,8 +1394,18 @@ const searchPublicVisaTypes = async (query = {}) => {
   const countrySlugCandidates = query.country ? buildCountrySlugCandidates(query.country) : [];
   const visaTypeSlugCandidates = query.type ? buildVisaTypeSlugCandidates(query.type) : [];
 
+  const activeCountries = await Country.find({ isActive: true }).select("slug").lean();
+  const activeCountrySlugs = activeCountries.map((item) => item.slug).filter(Boolean);
+  if (activeCountrySlugs.length === 0) {
+    return [];
+  }
+
+  filter.countrySlug = { $in: activeCountrySlugs };
+
   if (query.country) {
-    filter.countrySlug = { $in: countrySlugCandidates };
+    filter.countrySlug = {
+      $in: countrySlugCandidates.filter((slug) => activeCountrySlugs.includes(slug)),
+    };
   }
 
   if (query.type) {
@@ -1280,6 +1459,37 @@ const createPublicEnquiry = async (payload, actorUserId = null) => {
       }
       throw error;
     }
+  }
+
+  try {
+    await sendAdminFormNotification({
+      formType: "public_enquiry",
+      data: {
+        name: created?.name,
+        email: created?.email,
+        phone: created?.phone,
+        countryOfInterest: created?.countryOfInterest,
+        visaInterestType: created?.visaInterestType,
+        enquiryType: created?.enquiryType,
+        message: created?.message,
+        preferredContactMethod: created?.preferredContactMethod,
+        pageSource: created?.pageSource,
+        status: created?.status,
+        enquiryNumber: created?.enquiryNumber,
+      },
+      record: created,
+      meta: {
+        sourceRoute: "/api/v1/public/enquiries",
+        sourcePage: created?.pageSource,
+        replyTo: created?.email,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send public enquiry notification", {
+      error: mailError.message,
+      recordId: String(created?._id || ""),
+      formType: "public_enquiry",
+    });
   }
 
   return created;
@@ -1389,7 +1599,14 @@ const createUserTicket = async (userId, payload, files = []) => {
     await ensureOwnershipOfApplication(payload.applicationId, userId);
   }
 
-  const attachments = await uploadTicketFiles(files, userId);
+  const urlAttachments = buildUrlAttachments(parseAttachmentUrls(payload.attachmentUrls));
+  const uploadedAttachments = await uploadTicketFiles(files, userId);
+  const attachments = [...urlAttachments, ...uploadedAttachments];
+
+  let ticketUser = null;
+  if (userId) {
+    ticketUser = await User.findById(userId).select("firstName lastName fullName email phone").lean();
+  }
 
   let ticket = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -1423,6 +1640,37 @@ const createUserTicket = async (userId, payload, files = []) => {
     }
   }
 
+  try {
+    await sendAdminFormNotification({
+      formType: "user_support_ticket",
+      data: {
+        ticketNumber: ticket?.ticketNumber,
+        applicationId: ticket?.applicationId,
+        subject: ticket?.subject,
+        description: ticket?.description,
+        category: ticket?.category,
+        priority: ticket?.priority,
+        status: ticket?.status,
+        fullName:
+          ticketUser?.fullName || `${ticketUser?.firstName || ""} ${ticketUser?.lastName || ""}`.trim() || "",
+        email: ticketUser?.email || "",
+        phone: ticketUser?.phone || "",
+      },
+      record: ticket,
+      meta: {
+        sourceRoute: "/api/v1/user/tickets",
+        replyTo: ticketUser?.email || undefined,
+        files: attachments,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send support ticket notification", {
+      error: mailError.message,
+      recordId: String(ticket?._id || ""),
+      formType: "user_support_ticket",
+    });
+  }
+
   return ticket;
 };
 
@@ -1449,7 +1697,9 @@ const replyToUserTicket = async (userId, ticketId, payload, files = []) => {
     throw new ApiError(422, "TICKET_CLOSED", "Ticket is closed");
   }
 
-  const attachments = await uploadTicketFiles(files, userId);
+  const urlAttachments = buildUrlAttachments(parseAttachmentUrls(payload.attachmentUrls));
+  const uploadedAttachments = await uploadTicketFiles(files, userId);
+  const attachments = [...urlAttachments, ...uploadedAttachments];
 
   ticket.replies.push({
     senderType: "user",
@@ -1512,8 +1762,47 @@ const listAdminCountries = async (query = {}) => {
     Country.countDocuments(filter),
   ]);
 
+  const countryIds = items.map((item) => item._id);
+  const visaTypeStats = await CountryVisaType.aggregate([
+    { $match: { countryId: { $in: countryIds } } },
+    {
+      $group: {
+        _id: "$countryId",
+        totalVisaTypes: { $sum: 1 },
+        activeVisaTypes: {
+          $sum: {
+            $cond: [{ $eq: ["$isActive", true] }, 1, 0],
+          },
+        },
+        activeApplyVisaTypes: {
+          $sum: {
+            $cond: [
+              {
+                $and: [{ $eq: ["$isActive", true] }, { $eq: ["$applicationEnabled", true] }],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  const visaTypeStatsMap = new Map(visaTypeStats.map((item) => [String(item._id), item]));
+
   return {
-    items: items.map(buildCountryPayload),
+    items: items.map((item) => {
+      const payload = buildCountryPayload(item);
+      const stats = visaTypeStatsMap.get(String(item._id));
+
+      return {
+        ...payload,
+        totalVisaTypes: stats?.totalVisaTypes || 0,
+        activeVisaTypes: stats?.activeVisaTypes || 0,
+        activeApplyVisaTypes: stats?.activeApplyVisaTypes || 0,
+      };
+    }),
     pagination: getPaginationMeta(page, limit, total),
   };
 };
@@ -2194,7 +2483,9 @@ const replyToAdminTicket = async (ticketId, payload, actorId, files = []) => {
     throw new ApiError(404, "TICKET_NOT_FOUND", "Ticket not found");
   }
 
-  const attachments = await uploadTicketFiles(files, actorId || "admin");
+  const urlAttachments = buildUrlAttachments(parseAttachmentUrls(payload.attachmentUrls));
+  const uploadedAttachments = await uploadTicketFiles(files, actorId || "admin");
+  const attachments = [...urlAttachments, ...uploadedAttachments];
 
   ticket.replies.push({
     senderType: "admin",
@@ -2216,8 +2507,18 @@ const listAdminUsers = async (query = {}) => {
   const { page, limit, skip } = getPagination(query);
   const filter = {};
 
+  if (query.isDeleted !== undefined && query.isDeleted !== "") {
+    filter.isDeleted = String(query.isDeleted) === "true";
+  } else {
+    filter.isDeleted = { $ne: true };
+  }
+
   if (query.isActive !== undefined && query.isActive !== "") {
     filter.isActive = String(query.isActive) === "true";
+  }
+
+  if (query.role) {
+    filter.role = trim(query.role);
   }
 
   if (query.search) {
@@ -2229,10 +2530,14 @@ const listAdminUsers = async (query = {}) => {
     ];
   }
 
+  const allowedSortBy = new Set(["createdAt", "updatedAt", "firstName", "lastName", "email", "role"]);
+  const sortBy = allowedSortBy.has(trim(query.sortBy)) ? trim(query.sortBy) : "createdAt";
+  const sortOrder = String(query.sortOrder || "desc").toLowerCase() === "asc" ? 1 : -1;
+
   const [items, total] = await Promise.all([
     User.find(filter)
       .select("firstName lastName fullName email phone role avatarUrl isActive isDeleted createdAt updatedAt")
-      .sort({ createdAt: -1 })
+      .sort({ [sortBy]: sortOrder, _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
@@ -2307,22 +2612,45 @@ const getAdminUserById = async (userId) => {
 };
 
 const updateAdminUserStatus = async (userId, payload) => {
-  const updates = {};
-
-  if (hasOwn(payload, "isActive")) {
-    updates.isActive = Boolean(payload.isActive);
+  const existing = await User.findById(userId).select("isActive isDeleted deletedAt role").lean();
+  if (!existing) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
   }
 
+  const updates = {};
+
   if (hasOwn(payload, "isDeleted")) {
-    updates.isDeleted = Boolean(payload.isDeleted);
-    updates.deletedAt = updates.isDeleted ? new Date() : null;
-    if (updates.isDeleted) {
+    const shouldDelete = Boolean(payload.isDeleted);
+    if (!shouldDelete && existing.isDeleted) {
+      throw new ApiError(422, "INVALID_USER_STATE", "Deleted users cannot be restored from status update");
+    }
+
+    if (shouldDelete) {
+      updates.isDeleted = true;
+      updates.deletedAt = existing.deletedAt || new Date();
       updates.isActive = false;
     }
   }
 
+  const deletedAfterUpdate = updates.isDeleted === true || (existing.isDeleted && !hasOwn(payload, "isDeleted"));
+
+  if (hasOwn(payload, "isActive")) {
+    if (deletedAfterUpdate && Boolean(payload.isActive)) {
+      throw new ApiError(422, "INVALID_USER_STATE", "Deleted users cannot be activated");
+    }
+
+    updates.isActive = deletedAfterUpdate ? false : Boolean(payload.isActive);
+  }
+
   if (hasOwn(payload, "role")) {
+    if (deletedAfterUpdate) {
+      throw new ApiError(422, "INVALID_USER_STATE", "Deleted users cannot be modified");
+    }
     updates.role = trim(payload.role);
+  }
+
+  if (Object.keys(updates).length === 0) {
+    throw new ApiError(422, "VALIDATION_ERROR", "At least one updatable field is required");
   }
 
   const user = await User.findByIdAndUpdate(userId, updates, {
@@ -2351,7 +2679,16 @@ const deleteAdminUser = async (userId, options = {}) => {
     return { deleted: true, hardDelete: true, userId };
   }
 
-  const user = await User.findByIdAndUpdate(
+  const existing = await User.findById(userId).lean();
+  if (!existing) {
+    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
+  }
+
+  if (existing.isDeleted) {
+    return { deleted: true, hardDelete: false, userId, alreadyDeleted: true };
+  }
+
+  await User.findByIdAndUpdate(
     userId,
     {
       isDeleted: true,
@@ -2360,10 +2697,6 @@ const deleteAdminUser = async (userId, options = {}) => {
     },
     { new: true, runValidators: true }
   ).lean();
-
-  if (!user) {
-    throw new ApiError(404, "USER_NOT_FOUND", "User not found");
-  }
 
   return { deleted: true, hardDelete: false, userId };
 };
@@ -2391,7 +2724,7 @@ const getAdminDashboardSummary = async () => {
     Enquiry.countDocuments({ status: "new" }),
     SupportTicket.countDocuments({}),
     SupportTicket.countDocuments({ status: { $in: ["open", "in_progress"] } }),
-    User.countDocuments({}),
+    User.countDocuments({ isDeleted: { $ne: true } }),
     User.countDocuments({ isActive: true, isDeleted: { $ne: true } }),
   ]);
 

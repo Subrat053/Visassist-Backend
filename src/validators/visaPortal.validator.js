@@ -180,10 +180,12 @@ const ticketCreateSchema = z.object({
   description: z.string().min(5),
   priority: z.enum(TICKET_PRIORITIES).optional(),
   assignedTo: objectId.optional(),
+  attachmentUrls: z.union([z.array(z.string().url()), z.string()]).optional(),
 });
 
 const ticketReplySchema = z.object({
   message: z.string().min(1),
+  attachmentUrls: z.union([z.array(z.string().url()), z.string()]).optional(),
 });
 
 const ticketStatusSchema = z.object({

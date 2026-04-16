@@ -22,6 +22,7 @@ const ApiError = require("../../utils/ApiError.js");
 const { issueAuthTokens, rotateRefreshToken } = require("../../services/token.service.js");
 const { uploadDocumentBuffer } = require("../../services/cloudinary.service.js");
 const { logAuditEvent } = require("../../services/auditTrail.service.js");
+const { sendAdminFormNotification } = require("../../services/email");
 const { buildDocumentName } = require("../../utils/documentNaming.js");
 const { generateCaseId, generateInvoiceNumber, generateReceiptNumber } = require("../../utils/visaassist.id.js");
 const { getPagination, getPaginationMeta } = require("../../utils/pagination.js");
@@ -1435,6 +1436,32 @@ const createPublicEligibility = async (payload, context = {}) => {
     null
   );
 
+  try {
+    await sendAdminFormNotification({
+      formType: "public_eligibility",
+      data: {
+        ...payload,
+        fullName: lead.fullName,
+        source: lead.source,
+        destinationCountry: lead.destinationCountry,
+        visaCategory: lead.visaCategory,
+        priorRefusal: lead.priorRefusal,
+        notes: lead.notes,
+      },
+      record: lead,
+      meta: {
+        sourceRoute: "/api/v1/public/eligibility-check",
+        sourcePage: context.pagePath || "",
+        replyTo: payload.email,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send public eligibility notification", {
+      error: mailError.message,
+      recordId: String(lead._id),
+    });
+  }
+
   return {
     leadId: lead._id,
     message: "Eligibility request submitted successfully",
@@ -1458,6 +1485,31 @@ const createPublicContact = async (payload, context = {}) => {
     },
     null
   );
+
+  try {
+    await sendAdminFormNotification({
+      formType: "public_contact",
+      data: {
+        ...payload,
+        fullName: lead.fullName,
+        source: lead.source,
+        destinationCountry: lead.destinationCountry,
+        visaCategory: lead.visaCategory,
+        notes: lead.notes,
+      },
+      record: lead,
+      meta: {
+        sourceRoute: "/api/v1/public/contact",
+        sourcePage: context.pagePath || "",
+        replyTo: payload.email,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send public contact notification", {
+      error: mailError.message,
+      recordId: String(lead._id),
+    });
+  }
 
   return {
     leadId: lead._id,
@@ -1563,6 +1615,30 @@ const createPublicApplication = async (payload, context = {}, actorId = null) =>
       convertedCaseId: createdCase._id,
     },
   });
+
+  try {
+    await sendAdminFormNotification({
+      formType: "public_application_legacy",
+      data: {
+        ...payload,
+        leadId: lead._id,
+        applicantId: applicant._id,
+        caseId: createdCase._id,
+        caseNumber: createdCase.caseId,
+      },
+      record: createdCase,
+      meta: {
+        sourceRoute: "/api/v1/public/applications",
+        sourcePage: context.pagePath || "",
+        replyTo: payload.email,
+      },
+    });
+  } catch (mailError) {
+    console.error("[FORM_MAIL] Failed to send public legacy application notification", {
+      error: mailError.message,
+      recordId: String(createdCase._id),
+    });
+  }
 
   return {
     leadId: lead._id,

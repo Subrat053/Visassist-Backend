@@ -4,6 +4,7 @@ const asyncHandler = require("../../utils/asyncHandler");
 
 exports.createCheckoutSession = asyncHandler(async (req, res) => {
   const { serviceType, amount, currency = "usd", description } = req.body;
+  const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
 
   const payment = await Payment.create({
     userId: req.user._id,
@@ -30,8 +31,8 @@ exports.createCheckoutSession = asyncHandler(async (req, res) => {
         quantity: 1,
       },
     ],
-    success_url: `${process.env.CLIENT_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.CLIENT_URL}/payment-cancel`,
+    success_url: `${frontendUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${frontendUrl}/payment-cancel`,
     metadata: {
       paymentId: String(payment._id),
       userId: String(req.user._id),

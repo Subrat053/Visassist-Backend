@@ -7,7 +7,7 @@ const morgan = require("morgan");
 const apiRouter = require("./routes/index.js");
 const { errorHandler, notFoundHandler } = require("./middlewares/error.middleware.js");
 
-const corsOrigin = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || "http://localhost:5173";
+const corsOrigin = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
 const corsOrigins = corsOrigin
 	.split(",")
 	.map((origin) => origin.trim())

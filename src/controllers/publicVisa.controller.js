@@ -18,7 +18,7 @@ const getPublicCountryBySlug = asyncHandler(async (req, res) => {
 });
 
 const listPublicVisaTypesByCountry = asyncHandler(async (req, res) => {
-  const data = await visaPortalService.listPublicVisaTypesByCountry(req.params.countrySlug);
+  const data = await visaPortalService.listPublicVisaTypesByCountry(req.params.countrySlug, req.query);
   return sendSuccess(res, 200, data);
 });
 

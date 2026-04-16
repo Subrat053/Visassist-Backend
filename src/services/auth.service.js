@@ -164,7 +164,8 @@ const forgotPassword = async (email) => {
   user.passwordResetExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
   await user.save();
 
-  const resetUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/reset-password?token=${rawToken}`;
+  const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173";
+  const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
   await sendEmail({
     to: user.email,
     subject: "Reset your Y-Axis password",
