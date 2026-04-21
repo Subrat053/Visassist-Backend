@@ -46,8 +46,8 @@ const PUBLIC_SITE_SETTINGS_DEFAULTS = {
   siteName: "Visaassist",
   siteTagline: "Global Services",
   siteLogoUrl: "",
-  supportPhone: "+91 12345 67890",
-  whatsappNumber: "911234567890",
+  supportPhone: "+19729720314",
+  whatsappNumber: "+19729720314",
   homeBannerTitle: "What can we do for you today?",
   homeBannerSubtitle:
     "Choose your goal and let us guide you with the right solution, expert support, and the best next steps for your journey.",
